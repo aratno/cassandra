@@ -382,6 +382,14 @@ public final class StatementRestrictions
                            .anyMatch(p -> ((SingleRestriction) p).isEQ());
     }
 
+    public boolean isColumnRestrictedByIn(ColumnMetadata columnDef)
+    {
+        Set<Restriction> restrictions = getRestrictions(columnDef.kind).getRestrictions(columnDef);
+        return restrictions.stream()
+                           .filter(SingleColumnRestriction.INRestriction.class::isInstance)
+                           .anyMatch(p -> ((SingleColumnRestriction.INRestriction) p).isIN());
+    }
+
     /**
      * Returns the <code>Restrictions</code> for the specified type of columns.
      *

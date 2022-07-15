@@ -1428,7 +1428,10 @@ public class SelectStatement implements CQLStatement.SingleKeyspaceCqlStatement
 
                 while (i != def.position())
                 {
-                    checkTrue(restrictions.isColumnRestrictedByEq(table.clusteringColumns().get(i++)),
+                    int j = i++;
+                    boolean isEqRestricted = restrictions.isColumnRestrictedByEq(table.clusteringColumns().get(j));
+                    boolean isInRestricted = restrictions.isColumnRestrictedByIn(table.clusteringColumns().get(j));
+                    checkTrue(isEqRestricted || isInRestricted,
                               "Order by currently only supports the ordering of columns following their declared order in the PRIMARY KEY");
                 }
                 i++;
