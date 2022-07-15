@@ -28,6 +28,7 @@ import org.apache.cassandra.cql3.Duration;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.cql3.restrictions.StatementRestrictions;
 import org.apache.cassandra.exceptions.InvalidRequestException;
+import org.assertj.core.api.Assertions;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -3190,5 +3191,31 @@ public class SelectTest extends CQLTester
                                "CREATE FUNCTION %s (val double) RETURNS null ON null INPUT RETURNS double LANGUAGE java AS 'return 10.0d;'");
         execute("INSERT INTO %s (k1, k2) VALUES (uuid(), 'k2')");
         assertRowCount(execute("SELECT system.token(k1, k2) FROM %s"), 1);
+    }
+
+    @Test
+    public void testQueryWithInClauseAndClustering() throws Throwable
+    {
+        createTable("CREATE TABLE %s (pk1 int, ck1 int, ck2 int, PRIMARY KEY (pk1, ck1, ck2))");
+
+        execute("INSERT INTO %s (pk1, ck1, ck2) VALUES (?, ?, ?)", 1, 2, 3);
+
+        // Should fail - cannot sort by ck2 without loading all data for pk1
+        String orderByClusteringSuffixUnspecifiedPrefix = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 ORDER BY ck2";
+        Assertions.assertThatThrownBy(() -> execute(orderByClusteringSuffixUnspecifiedPrefix))
+                  .isInstanceOf(InvalidRequestException.class)
+                  .hasMessage("Order by currently only supports the ordering of columns following their declared order in the PRIMARY KEY");
+
+        // Should succeed - each value of ck1 is already sorted by ck2
+        String orderByClusteringSuffixSpecifiedPrefixWithEquals = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 = 2 ORDER BY ck2";
+        execute(orderByClusteringSuffixSpecifiedPrefixWithEquals);
+
+        // Should succeed - this requires a merge join since data for each value of ck2 is sorted for each (pk1, ck1)
+        String orderByClusteringSuffixSpecifiedPartitionWithInClusteringPrefixWithEquals = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 IN (1, 10) AND ck1 = 2 ORDER BY ck2";
+        execute(orderByClusteringSuffixSpecifiedPartitionWithInClusteringPrefixWithEquals);
+
+        // Should succeed - this requires a merge join since data for each value of ck1 is sorted by ck2
+        String orderByClusteringSuffixSpecifiedPrefixWithIn = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 IN (2, 20) ORDER BY ck2";
+        execute(orderByClusteringSuffixSpecifiedPrefixWithIn);
     }
 }
