@@ -3199,6 +3199,10 @@ public class SelectTest extends CQLTester
         createTable("CREATE TABLE %s (pk1 int, ck1 int, ck2 int, PRIMARY KEY (pk1, ck1, ck2))");
 
         execute("INSERT INTO %s (pk1, ck1, ck2) VALUES (?, ?, ?)", 1, 2, 3);
+        execute("INSERT INTO %s (pk1, ck1, ck2) VALUES (?, ?, ?)", 1, 2, 4);
+        execute("INSERT INTO %s (pk1, ck1, ck2) VALUES (?, ?, ?)", 1, 3, -30);
+        execute("INSERT INTO %s (pk1, ck1, ck2) VALUES (?, ?, ?)", 10, 2, -30);
+        execute("INSERT INTO %s (pk1, ck1, ck2) VALUES (?, ?, ?)", 10, 2, 40);
 
         // Should fail - cannot sort by ck2 without loading all data for pk1
         String orderByClusteringSuffixUnspecifiedPrefix = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 ORDER BY ck2";
@@ -3208,14 +3212,23 @@ public class SelectTest extends CQLTester
 
         // Should succeed - each value of ck1 is already sorted by ck2
         String orderByClusteringSuffixSpecifiedPrefixWithEquals = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 = 2 ORDER BY ck2";
-        execute(orderByClusteringSuffixSpecifiedPrefixWithEquals);
+        assertRows(execute(orderByClusteringSuffixSpecifiedPrefixWithEquals),
+            row(1, 2, 3),
+            row(1, 2, 4));
 
         // Should succeed - this requires a merge join since data for each value of ck2 is sorted for each (pk1, ck1)
         String orderByClusteringSuffixSpecifiedPartitionWithInClusteringPrefixWithEquals = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 IN (1, 10) AND ck1 = 2 ORDER BY ck2";
-        execute(orderByClusteringSuffixSpecifiedPartitionWithInClusteringPrefixWithEquals);
+        assertRows(execute(orderByClusteringSuffixSpecifiedPartitionWithInClusteringPrefixWithEquals),
+            row(10, 2, -30),
+            row(1, 2, 3),
+            row(1, 2, 4),
+            row(10, 2, 40));
 
         // Should succeed - this requires a merge join since data for each value of ck1 is sorted by ck2
-        String orderByClusteringSuffixSpecifiedPrefixWithIn = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 IN (2, 20) ORDER BY ck2";
-        execute(orderByClusteringSuffixSpecifiedPrefixWithIn);
+        String orderByClusteringSuffixSpecifiedPrefixWithIn = "SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 IN (2, 3) ORDER BY ck2";
+        assertRows(execute(orderByClusteringSuffixSpecifiedPrefixWithIn),
+            row(1, 3, -30),
+            row(1, 2, 3),
+            row(1, 2, 4));
     }
 }
