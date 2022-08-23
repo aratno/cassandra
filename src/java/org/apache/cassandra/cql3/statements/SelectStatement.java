@@ -896,6 +896,8 @@ public class SelectStatement implements CQLStatement.SingleKeyspaceCqlStatement
         ResultSet cqlRows = result.build();
         maybeWarn(result, options);
 
+        // This currently runs a naive sort - it should (theoretically) be more efficient to process partitions into
+        // sorted runs, then mergesort those runs.
         orderResults(cqlRows);
 
         cqlRows.trim(userLimit);
