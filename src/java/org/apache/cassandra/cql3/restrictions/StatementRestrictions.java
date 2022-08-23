@@ -357,6 +357,27 @@ public final class StatementRestrictions
         return partitionKeyRestrictions.hasIN();
     }
 
+    public boolean clusteringKeyPrefixIsIn()
+    {
+        /* TODO: Expand this.
+
+        This should return true if a clustering key prefix is only restricted with IN, such as:
+
+            SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 IN (2, 3) ORDER BY ck2
+
+        In this situation, we can query each value of ck1 and use a MergeIterator to combine the results efficiently.
+        This is only feasible if there are no other restrictions on ck1, for example the following cannot be executed
+        efficiently:
+
+            SELECT pk1, ck1, ck2 FROM %s WHERE pk1 = 1 AND ck1 IN (2, 3) AND ck1 > 2 ORDER BY ck2
+
+        What about queries like this:
+
+            SELECT pk1, ck1, ck2 FROM %s WHERE (pk1, ck1) IN ((1, 1), (1, 2), (2, 6)) ORDER BY ck2
+        */
+        return true;
+    }
+
     /**
      * Checks if the query request a range of partition keys.
      *

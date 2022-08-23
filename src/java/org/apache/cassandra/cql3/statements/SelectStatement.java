@@ -1060,8 +1060,8 @@ public class SelectStatement implements CQLStatement.SingleKeyspaceCqlStatement
 
     private boolean needsPostQueryOrdering()
     {
-        // We need post-query ordering only for queries with IN on the partition key and an ORDER BY.
-        return restrictions.keyIsInRelation() && !parameters.orderings.isEmpty();
+        // We need post-query ordering only for queries with IN on the partition key or clustering prefix and an ORDER BY.
+        return (restrictions.keyIsInRelation() || restrictions.clusteringKeyPrefixIsIn()) && !parameters.orderings.isEmpty();
     }
 
     /**
@@ -1401,7 +1401,7 @@ public class SelectStatement implements CQLStatement.SingleKeyspaceCqlStatement
                                                                    Map<ColumnMetadata, Boolean> orderingColumns)
                                                                    throws InvalidRequestException
         {
-            if (!restrictions.keyIsInRelation())
+            if (!(restrictions.keyIsInRelation() || restrictions.clusteringKeyPrefixIsIn()))
                 return null;
 
             List<Integer> idToSort = new ArrayList<Integer>(orderingColumns.size());
