@@ -39,6 +39,7 @@ import javax.management.ObjectName;
 import javax.management.StandardMBean;
 import javax.management.remote.JMXConnectorServer;
 import javax.management.remote.JMXServiceURL;
+import javax.management.remote.MBeanServerForwarder;
 import javax.management.remote.rmi.RMIConnectorServer;
 import javax.management.remote.rmi.RMIJRMPServerImpl;
 
@@ -84,6 +85,7 @@ import org.apache.cassandra.thrift.ThriftServer;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.JVMStabilityInspector;
+import org.apache.cassandra.utils.JmxServerUtils;
 import org.apache.cassandra.utils.MBeanWrapper;
 import org.apache.cassandra.utils.Mx4jTool;
 import org.apache.cassandra.utils.NativeLibrary;
@@ -100,6 +102,7 @@ public class CassandraDaemon
 {
     public static final String MBEAN_NAME = "org.apache.cassandra.db:type=NativeAccess";
     private static JMXConnectorServer jmxServer = null;
+    private static MBeanServerForwarder authzProxy = null;
 
     private static final Logger logger;
 
@@ -137,6 +140,8 @@ public class CassandraDaemon
         if (jmxPort == null)
             return;
 
+        initJmxAuthzProxy();
+
         System.setProperty("java.rmi.server.hostname", InetAddress.getLoopbackAddress().getHostAddress());
         RMIServerSocketFactory serverFactory = new RMIServerSocketFactoryImpl();
         Map<String, Object> env = new HashMap<>();
@@ -153,6 +158,10 @@ public class CassandraDaemon
                                                              (RMIServerSocketFactory) env.get(RMIConnectorServer.RMI_SERVER_SOCKET_FACTORY_ATTRIBUTE),
                                                              env);
             jmxServer = new RMIConnectorServer(url, env, server, ManagementFactory.getPlatformMBeanServer());
+
+            if (authzProxy != null)
+                jmxServer.setMBeanServerForwarder(authzProxy);
+
             jmxServer.start();
             ((JmxRegistry)registry).setRemoteServerStub(server.toStub());
         }
@@ -160,6 +169,11 @@ public class CassandraDaemon
         {
             exitOrFail(1, e.getMessage(), e.getCause());
         }
+    }
+
+    private void initJmxAuthzProxy()
+    {
+        authzProxy = new JmxServerUtils.CassandraMBeanServerAccessController();
     }
 
     private static final CassandraDaemon instance = new CassandraDaemon();
