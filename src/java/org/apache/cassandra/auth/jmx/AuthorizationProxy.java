@@ -28,6 +28,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import javax.management.InstanceNotFoundException;
 import javax.management.MBeanServer;
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
@@ -39,8 +40,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.auth.*;
+import org.apache.cassandra.config.CassandraJmxSecurityProfile;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.service.StorageService;
+import org.apache.cassandra.utils.JMXServerUtils;
 import org.apache.cassandra.utils.MBeanWrapper;
 
 /**
@@ -147,6 +150,10 @@ public class AuthorizationProxy implements InvocationHandler
 
         if ("getMBeanServer".equals(methodName))
             throw new SecurityException("Access denied");
+
+        if (JMXServerUtils.getSecurityProfile() == CassandraJmxSecurityProfile.RESTRICTIVE
+                && methodName.equals("invoke") && args.length == 4)
+            checkVulnerableMethods(args);
 
         // Retrieve Subject from current AccessControlContext
         AccessControlContext acc = AccessController.getContext();
@@ -477,6 +484,59 @@ public class AuthorizationProxy implements InvocationHandler
                                                  .filter(details -> details.resource instanceof JMXResource)
                                                  .collect(Collectors.toSet());
     }
+
+    private void checkVulnerableMethods(Object args[])
+    {
+        assert args.length == 4;
+        ObjectName name = (ObjectName) args[0];
+        String operationName = (String) args[1];
+        Object[] params = (Object[]) args[2];
+        String[] signature = (String[]) args[3];
+
+        // When adding compiler directives from a file, most JDKs will log the file contents if invalid, which
+        // leads to an arbitrary file read vulnerability
+        checkCompilerDirectiveAddMethods(name, operationName);
+
+        // Loading arbitrary (JVM and native) libraries from remotes
+        checkJvmtiLoad(name, operationName);
+        checkMLetMethods(name, operationName);
+    }
+
+    private void checkCompilerDirectiveAddMethods(ObjectName name, String operation)
+    {
+        if (name.getCanonicalName().equals("com.sun.management:type=DiagnosticCommand")
+            && operation.equals("compilerDirectivesAdd"))
+            throw new SecurityException("Access is denied!");
+    }
+
+    private void checkJvmtiLoad(ObjectName name, String operation)
+    {
+        if (name.getCanonicalName().equals("com.sun.management:type=DiagnosticCommand")
+            && operation.equals("jvmtiAgentLoad"))
+            throw new SecurityException("Access is denied!");
+    }
+
+    private void checkMLetMethods(ObjectName name, String operation)
+    {
+        // Inspired by MBeanServerAccessController, but that class ignores check if a SecurityManager is installed,
+        // which we don't want
+
+        if (operation == null)
+            return;
+
+        try
+        {
+            if (!mbs.isInstanceOf(name, "javax.management.loading.MLet"))
+                return;
+        } catch (InstanceNotFoundException infe)
+        {
+            return;
+        }
+
+        if (operation.equals("addURL") || operation.equals("getMBeansFromURL"))
+            throw new SecurityException("Access is denied!");
+    }
+
 
     public static final class JmxPermissionsCache extends AuthCache<RoleResource, Set<PermissionDetails>>
         implements JmxPermissionsCacheMBean

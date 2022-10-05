@@ -274,7 +274,7 @@ JVM_OPTS="$JVM_OPTS -Dcom.sun.management.jmxremote.password.file=/etc/cassandra/
 
 ## Cassandra also ships with a helper for delegating JMX authz calls to the configured IAuthorizer,
 ## uncomment this to use it. Requires one of the two authentication options to be enabled
-#JVM_OPTS="$JVM_OPTS -Dcassandra.jmx.authorizer=org.apache.cassandra.auth.jmx.AuthorizationProxy"
+JVM_OPTS="$JVM_OPTS -Dcassandra.jmx.authorizer=org.apache.cassandra.auth.jmx.AuthorizationProxy"
 
 # To use mx4j, an HTML interface for JMX, add mx4j-tools.jar to the lib/
 # directory.

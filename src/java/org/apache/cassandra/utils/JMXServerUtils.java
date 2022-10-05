@@ -211,8 +211,8 @@ public class JMXServerUtils
             final InvocationHandler handler = FBUtilities.construct(authzProxyClass, "JMX authz proxy");
             final Class[] interfaces = { MBeanServerForwarder.class };
 
-            Object proxy = Proxy.newProxyInstance(CassandraMBeanServerAccessController.class.getClassLoader(), interfaces, handler);
-            return CassandraMBeanServerAccessController.class.cast(proxy);
+            Object proxy = Proxy.newProxyInstance(MBeanServerForwarder.class.getClassLoader(), interfaces, handler);
+            return MBeanServerForwarder.class.cast(proxy);
         }
         else
         {
@@ -295,7 +295,7 @@ public class JMXServerUtils
                          serverFactory.getNeedClientAuth());
     }
 
-    private static CassandraJmxSecurityProfile getSecurityProfile()
+    public static CassandraJmxSecurityProfile getSecurityProfile()
     {
         try
         {
