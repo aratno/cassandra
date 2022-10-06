@@ -39,7 +39,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.auth.*;
-import org.apache.cassandra.config.CassandraJmxSecurityProfile;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.service.StorageService;
 <<<<<<< HEAD
@@ -153,8 +152,8 @@ public class AuthorizationProxy implements InvocationHandler
         if ("getMBeanServer".equals(methodName))
             throw new SecurityException("Access denied");
 
-        if (JMXServerUtils.getSecurityProfile() == CassandraJmxSecurityProfile.RESTRICTIVE
-                && methodName.equals("invoke") && args.length == 4)
+        // Corresponds to MBeanServer.invoke
+        if (methodName.equals("invoke") && args.length == 4)
             checkVulnerableMethods(args);
 
         // Retrieve Subject from current AccessControlContext

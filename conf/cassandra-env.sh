@@ -228,9 +228,6 @@ if [ "x$LOCAL_JMX" = "x" ]; then
     LOCAL_JMX=yes
 fi
 
-# By default, restrict JMX to prevent various remote-loading scenarios. Set to "lax" to allow these.
-JVM_OPTS="$JVM_OPTS -Dcassandra.jmx.security.profile=restrictive"
-
 # Specifies the default port over which Cassandra will be available for
 # JMX connections.
 # For security reasons, you should not expose this port to the internet.  Firewall it if needed.

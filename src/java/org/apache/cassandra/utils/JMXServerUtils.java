@@ -35,15 +35,10 @@ import java.rmi.RemoteException;
 import java.rmi.registry.Registry;
 import java.rmi.server.RMIClientSocketFactory;
 import java.rmi.server.RMIServerSocketFactory;
-import java.security.AccessController;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
-import javax.management.InstanceNotFoundException;
-import javax.management.MBeanException;
-import javax.management.ObjectName;
-import javax.management.ReflectionException;
 import javax.management.remote.*;
 import javax.management.remote.rmi.RMIConnectorServer;
 import javax.management.remote.rmi.RMIJRMPServerImpl;
@@ -51,14 +46,8 @@ import javax.rmi.ssl.SslRMIClientSocketFactory;
 import javax.rmi.ssl.SslRMIServerSocketFactory;
 import javax.security.auth.Subject;
 
-import com.sun.jmx.mbeanserver.GetPropertyAction;
-import com.sun.jmx.remote.security.MBeanServerAccessController;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
-
-import org.apache.cassandra.config.CassandraJmxSecurityProfile;
-import org.apache.cassandra.config.CassandraRelevantProperties;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -221,7 +210,7 @@ public class JMXServerUtils
             {
                 env.put("jmx.remote.x.access.file", accessFile);
             }
-            return new CassandraMBeanServerAccessController();
+            return null;
         }
     }
 
@@ -293,18 +282,6 @@ public class JMXServerUtils
                          ? "'JVM defaults'"
                          : Arrays.stream(serverFactory.getEnabledCipherSuites()).collect(Collectors.joining("','", "'", "'")),
                          serverFactory.getNeedClientAuth());
-    }
-
-    public static CassandraJmxSecurityProfile getSecurityProfile()
-    {
-        try
-        {
-            return CassandraRelevantProperties.CASSANDRA_JMX_SECURITY_PROFILE.convert(CassandraJmxSecurityProfile::convert);
-        } catch (IllegalArgumentException iae)
-        {
-            logger.warn("Invalid value for {} provided, using default", CassandraRelevantProperties.CASSANDRA_JMX_SECURITY_PROFILE, iae);
-            return CassandraJmxSecurityProfile.getDefault();
-        }
     }
 
     private static class JMXPluggableAuthenticatorWrapper implements JMXAuthenticator
@@ -384,72 +361,6 @@ public class JMXServerUtils
 
         public void setRemoteServerStub(Remote remoteServerStub) {
             this.remoteServerStub = remoteServerStub;
-        }
-    }
-
-    static class CassandraMBeanServerAccessController extends MBeanServerAccessController
-    {
-        @Override
-        protected void checkRead()
-        {}
-
-        @Override
-        protected void checkWrite()
-        {}
-
-        // REVIEWER: I couldn't find an alternate place to implement this logic as part of ThreadAwareSecurityManager,
-        // which would be ideal, so opted to implement it here instead.
-
-        // This is taken from MBeanServerAccessController, with additional security checks
-        // For a longer list of JMX-based vulnerabilities, see:
-        // https://github.com/qtc-de/beanshooter/blob/2ec4f7a4b44a29f52315973fe944eb34bc772063/beanshooter/src/de/qtc/beanshooter/mbean/diagnostic/Dispatcher.java#L48
-        @Override
-        public Object invoke(ObjectName name, String operationName, Object params[], String signature[]) throws InstanceNotFoundException, MBeanException, ReflectionException
-        {
-            checkWrite();
-
-            if (getSecurityProfile() == CassandraJmxSecurityProfile.RESTRICTIVE)
-            {
-                // When adding compiler directives from a file, most JDKs will log the file contents if invalid, which
-                // leads to an arbitrary file read vulnerability
-                checkCompilerDirectiveAddMethods(name, operationName);
-
-                // Loading arbitrary (JVM and native) libraries from remotes
-                checkJvmtiLoad(name, operationName);
-                checkMLetMethods(name, operationName);
-            }
-
-            return getMBeanServer().invoke(name, operationName, params, signature);
-        }
-
-        private void checkCompilerDirectiveAddMethods(ObjectName name, String operation)
-        {
-            if (name.getCanonicalName().equals("com.sun.management:type=DiagnosticCommand")
-                    && operation.equals("compilerDirectivesAdd"))
-                throw new SecurityException("Access is denied!");
-        }
-
-        private void checkJvmtiLoad(ObjectName name, String operation)
-        {
-            if (name.getCanonicalName().equals("com.sun.management:type=DiagnosticCommand")
-                && operation.equals("jvmtiAgentLoad"))
-                throw new SecurityException("Access is denied!");
-        }
-
-        private void checkMLetMethods(ObjectName name, String operation)
-        throws InstanceNotFoundException
-        {
-            // Inspired by MBeanServerAccessController, but that class ignores check if a SecurityManager is installed,
-            // which we don't want
-
-            if (!operation.equals("addURL") && !operation.equals("getMBeansFromURL"))
-                return;
-
-            if (!getMBeanServer().isInstanceOf(name, "javax.management.loading.MLet"))
-                return;
-
-            if (operation.equals("addURL") || operation.equals("getMBeansFromURL"))
-                throw new SecurityException("Access is denied!");
         }
     }
 }
