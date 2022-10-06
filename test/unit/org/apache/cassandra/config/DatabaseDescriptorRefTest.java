@@ -69,7 +69,6 @@ public class DatabaseDescriptorRefTest
     "org.apache.cassandra.auth.IRoleManager",
     "org.apache.cassandra.auth.INetworkAuthorizer",
     "org.apache.cassandra.config.DatabaseDescriptor",
-    "org.apache.cassandra.config.CassandraJmxSecurityProfile",
     "org.apache.cassandra.config.CassandraRelevantProperties",
     "org.apache.cassandra.config.CassandraRelevantProperties$PropertyConverter",
     "org.apache.cassandra.config.ConfigurationLoader",
