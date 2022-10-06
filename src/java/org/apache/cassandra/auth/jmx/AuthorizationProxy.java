@@ -489,10 +489,22 @@ public class AuthorizationProxy implements InvocationHandler
     private void checkVulnerableMethods(Object args[])
     {
         assert args.length == 4;
-        ObjectName name = (ObjectName) args[0];
-        String operationName = (String) args[1];
-        Object[] params = (Object[]) args[2];
-        String[] signature = (String[]) args[3];
+        ObjectName name;
+        String operationName;
+        Object[] params;
+        String[] signature;
+        try
+        {
+            name = (ObjectName) args[0];
+            operationName = (String) args[1];
+            params = (Object[]) args[2];
+            signature = (String[]) args[3];
+        }
+        catch (ClassCastException cce)
+        {
+            logger.warn("Could not interpret arguments to check vulnerable MBean invocations; did the MBeanServer interface change?", cce);
+            return;
+        }
 
         // When adding compiler directives from a file, most JDKs will log the file contents if invalid, which
         // leads to an arbitrary file read vulnerability
