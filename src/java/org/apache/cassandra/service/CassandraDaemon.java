@@ -21,6 +21,8 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.rmi.AccessException;
@@ -85,7 +87,6 @@ import org.apache.cassandra.thrift.ThriftServer;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.JVMStabilityInspector;
-import org.apache.cassandra.utils.JmxServerUtils;
 import org.apache.cassandra.utils.MBeanWrapper;
 import org.apache.cassandra.utils.Mx4jTool;
 import org.apache.cassandra.utils.NativeLibrary;
@@ -140,7 +141,7 @@ public class CassandraDaemon
         if (jmxPort == null)
             return;
 
-        initJmxAuthzProxy();
+        MBeanServerForwarder authzProxy = createAuthzProxy();
 
         System.setProperty("java.rmi.server.hostname", InetAddress.getLoopbackAddress().getHostAddress());
         RMIServerSocketFactory serverFactory = new RMIServerSocketFactoryImpl();
@@ -171,9 +172,22 @@ public class CassandraDaemon
         }
     }
 
-    private void initJmxAuthzProxy()
+    private MBeanServerForwarder createAuthzProxy()
     {
-        authzProxy = new JmxServerUtils.CassandraMBeanServerAccessController();
+        // If a custom authz proxy is supplied (Cassandra ships with AuthorizationProxy, which
+        // delegates to its own role based IAuthorizer), then instantiate and return one which
+        // can be set as the JMXConnectorServer's MBeanServerForwarder.
+        // If no custom proxy is supplied, check system properties for the location of the
+        // standard access file & stash it in env
+        String authzProxyClass = System.getProperty("cassandra.jmx.authorizer");
+        if (authzProxyClass == null)
+            return null;
+
+        final InvocationHandler handler = FBUtilities.construct(authzProxyClass, "JMX authz proxy");
+        final Class[] interfaces = { MBeanServerForwarder.class };
+
+        Object proxy = Proxy.newProxyInstance(MBeanServerForwarder.class.getClassLoader(), interfaces, handler);
+        return MBeanServerForwarder.class.cast(proxy);
     }
 
     private static final CassandraDaemon instance = new CassandraDaemon();
