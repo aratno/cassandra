@@ -42,7 +42,6 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.auth.*;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.service.StorageService;
-import org.apache.cassandra.utils.JMXServerUtils;
 import org.apache.cassandra.utils.MBeanWrapper;
 
 /**
@@ -547,7 +546,6 @@ public class AuthorizationProxy implements InvocationHandler
         if (operation.equals("addURL") || operation.equals("getMBeansFromURL"))
             throw new SecurityException("Access is denied!");
     }
-
 
     public static final class JmxPermissionsCache extends AuthCache<RoleResource, Set<PermissionDetails>>
         implements JmxPermissionsCacheMBean
