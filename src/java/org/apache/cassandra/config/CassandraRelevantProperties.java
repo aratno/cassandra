@@ -21,7 +21,6 @@ package org.apache.cassandra.config;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.cassandra.exceptions.ConfigurationException;
-import org.apache.cassandra.service.FileSystemOwnershipCheck;
 
 /** A class that extracts system properties for the cassandra node it runs within. */
 public enum CassandraRelevantProperties
@@ -98,7 +97,6 @@ public enum CassandraRelevantProperties
 
     /** Cassandra jmx remote port */
     CASSANDRA_JMX_REMOTE_PORT("cassandra.jmx.remote.port"),
-    CASSANDRA_JMX_LOCAL_PORT("cassandra.jmx.local.port"),
 
     /** This property  indicates whether SSL is enabled for monitoring remotely. Default is set to false. */
     COM_SUN_MANAGEMENT_JMXREMOTE_SSL ("com.sun.management.jmxremote.ssl"),

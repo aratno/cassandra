@@ -41,11 +41,6 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.auth.*;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.service.StorageService;
-<<<<<<< HEAD
-=======
-import org.apache.cassandra.utils.JMXServerUtils;
-import org.apache.cassandra.utils.MBeanWrapper;
->>>>>>> bb5967b11c (Initial refactor, from CassandraMBeanServerAccessController to within AuthorizationProxy)
 
 /**
  * Provides a proxy interface to the platform's MBeanServer instance to perform
@@ -550,8 +545,7 @@ public class AuthorizationProxy implements InvocationHandler
             throw new SecurityException("Access is denied!");
     }
 
-
-    public static final class JmxPermissionsCache extends AuthCache<RoleResource, Set<PermissionDetails>>
+    private static final class JMXPermissionsCache extends AuthCache<RoleResource, Set<PermissionDetails>>
     {
         protected JMXPermissionsCache()
         {
