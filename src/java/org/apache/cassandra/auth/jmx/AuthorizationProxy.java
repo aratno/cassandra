@@ -167,3 +167,4 @@ public class AuthorizationProxy implements InvocationHandler
             throw new SecurityException("Access is denied!");
     }
 }
+
