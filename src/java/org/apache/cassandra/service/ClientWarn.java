@@ -17,14 +17,17 @@
  */
 package org.apache.cassandra.service;
 
-import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 
 import org.apache.cassandra.concurrent.ExecutorLocals;
 import org.apache.cassandra.utils.FBUtilities;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ClientWarn extends ExecutorLocals.Impl
 {
+    private static final Logger logger = LoggerFactory.getLogger(ClientWarn.class);
     private static final String TRUNCATED = " [truncated]";
     public static ClientWarn instance = new ClientWarn();
 
@@ -46,6 +49,7 @@ public class ClientWarn extends ExecutorLocals.Impl
     public void warn(String text)
     {
         State state = get();
+        logger.info("Warning: {} on local state {}", text, state);
         if (state != null)
             state.add(text);
     }
@@ -90,7 +94,7 @@ public class ClientWarn extends ExecutorLocals.Impl
     public static class State
     {
         private boolean collecting = true;
-        private final List<String> warnings = new ArrayList<>();
+        private final List<String> warnings = new CopyOnWriteArrayList<>();
 
         private void add(String warning)
         {
