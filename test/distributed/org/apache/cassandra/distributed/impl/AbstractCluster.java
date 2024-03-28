@@ -306,7 +306,14 @@ public abstract class AbstractCluster<I extends IInstance> implements ICluster<I
         {
             ++generation;
             IClassTransformer transformer = classTransformer == null ? null : classTransformer.initialise();
-            ClassLoader classLoader = new InstanceClassLoader(generation, config.num(), version.classpath, sharedClassLoader, sharedClassPredicate, transformer);
+            // TODO: Document why this is necessary
+            final boolean isCurrent = version.equals(AbstractCluster.CURRENT_VERSION);
+            final String instanceClassLoaderName = String.format("%s-%s", isCurrent ? "current" : "alternate", version.version);
+            ClassLoader classLoader = new InstanceClassLoader(generation, config.num(), version.classpath, sharedClassLoader, sharedClassPredicate, transformer) {
+                public String getName() {
+                    return instanceClassLoaderName;
+                }
+            };
             ThreadGroup threadGroup = new ThreadGroup(clusterThreadGroup, "node" + config.num() + (generation > 1 ? "_" + generation : ""));
             if (instanceInitializer != null)
                 instanceInitializer.initialise(classLoader, threadGroup, config.num(), generation);

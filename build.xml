@@ -139,11 +139,14 @@
     <property name="cassandra.test.messagingService.nonGracefulShutdown" value="true"/>
 
     <!-- https://www.eclemma.org/jacoco/ -->
+    <property name="usejacoco" value="no"/>
     <property name="jacoco.version" value="0.8.8"/>
     <property name="jacoco.export.dir" value="${build.dir}/jacoco/" />
+    <property name="jacoco.reports.dir" value="${jacoco.export.dir}/reports" />
     <property name="jacoco.partials.dir" value="${jacoco.export.dir}/partials" />
     <property name="jacoco.partialexecfile" value="${jacoco.partials.dir}/partial.exec" />
     <property name="jacoco.finalexecfile" value="${jacoco.export.dir}/jacoco.exec" />
+    <property name="jacoco.classdump.dir" value="${jacoco.export.dir}/classdump" />
 
     <condition property="isMac" value="true">
         <os family="mac"/>
@@ -372,7 +375,9 @@
         <mkdir dir="${build.src.gen-java}"/>
         <mkdir dir="${build.dir.lib}"/>
         <mkdir dir="${jacoco.export.dir}"/>
+        <mkdir dir="${jacoco.reports.dir}"/>
         <mkdir dir="${jacoco.partials.dir}"/>
+        <mkdir dir="${jacoco.classdump.dir}"/>
 
         <!-- Set up jdk specific properties -->
         <javac includes="**/JdkProperties.java,**/SetSystemProperty.java" srcdir="test/anttasks" destdir="${test.classes}" includeantruntime="true" source="${java.default}" target="${java.default}">
@@ -396,7 +401,9 @@
         <delete dir="${build.src.gen-java}" />
         <delete dir="${version.properties.dir}" />
         <delete dir="${jacoco.export.dir}" />
+        <delete dir="${jacoco.reports.dir}"/>
         <delete dir="${jacoco.partials.dir}"/>
+        <delete dir="${jacoco.classdump.dir}"/>
     </target>
     <target depends="clean" name="cleanall"/>
 
@@ -1111,7 +1118,7 @@
         <condition><not><equals arg1="${build.test.dir}" arg2="${basedir}/build/test"/></not></condition>
       </fail>
       <condition property="additionalagent"
-                 value="-javaagent:${build.dir.lib}/jars/jacocoagent.jar=destfile=${jacoco.partialexecfile}"
+                 value="-javaagent:${build.dir.lib}/jars/jacocoagent.jar=destfile=${jacoco.partialexecfile},classdumpdir=${jacoco.classdump.dir},exclclassloader=sun.reflect.DelegatingClassLoader:alternate*"
                  else="">
         <istrue value="${usejacoco}"/>
       </condition>
@@ -1216,7 +1223,7 @@
   <macrodef name="testlist">
     <attribute name="test.file.list"/>
     <sequential>
-      <testmacrohelper inputdir="${test.dir}/${test.classlistprefix}" filelist="@{test.file.list}" exclude="**/*.java" timeout="${test.timeout}">
+      <testmacrohelper inputdir="${test.dir}/${test.classlistprefix}" filelist="@{test.file.list}" exclude="**/*.java" timeout="${test.timeout}" usejacoco="${usejacoco}">
         <jvmarg value="-Dlegacy-sstable-root=${test.data}/legacy-sstables"/>
         <jvmarg value="-Dinvalid-legacy-sstable-root=${test.data}/invalid-legacy-sstables"/>
         <jvmarg value="-Dcassandra.ring_delay_ms=1000"/>
@@ -1596,15 +1603,16 @@
         </sourcefiles>
       </structure>
       <!-- to produce reports in different formats. -->
-      <html destdir="${jacoco.export.dir}" />
-      <csv destfile="${jacoco.export.dir}/report.csv" />
-      <xml destfile="${jacoco.export.dir}/report.xml" />
+      <html destdir="${jacoco.reports.dir}" />
+      <csv destfile="${jacoco.reports.dir}/report.csv" />
+      <xml destfile="${jacoco.reports.dir}/report.xml" />
     </jacoco:report>
   </target>
 
   <target name="jacoco-cleanup" description="Destroy JaCoCo exec data and reports">
     <delete file="${jacoco.partialexecfile}"/>
     <delete dir="${jacoco.export.dir}"/>
+    <delete dir="${jacoco.reports.dir}"/>
   </target>
 
   <target name="javadoc" depends="build" description="Create javadoc" unless="no-javadoc">
