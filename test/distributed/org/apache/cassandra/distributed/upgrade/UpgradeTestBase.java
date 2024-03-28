@@ -200,11 +200,22 @@ public class UpgradeTestBase extends DistributedTestBase
             {
                 // only include pairs that are allowed, and start or end on CURRENT
                 if (SUPPORTED_UPGRADE_PATHS.hasEdge(start, to) && edgeTouchesTarget(start, to, CURRENT))
-                    upgrade.add(new TestVersions(versions.getLatest(start), Collections.singletonList(versions.getLatest(to))));
+                    upgrade.add(new TestVersions(tryVersion(start), Collections.singletonList(tryVersion(to))));
             }
             logger.info("Adding upgrades of\n{}", upgrade.stream().map(TestVersions::toString).collect(Collectors.joining("\n")));
             this.upgrade.addAll(upgrade);
             return this;
+        }
+
+        private Versions.Version tryVersion(Semver version)
+        {
+            try {
+                return versions.getLatest(version);
+            } catch (Throwable t)
+            {
+                logger.error("Failed to get version {}", version, t);
+                throw t;
+            }
         }
 
         /**
