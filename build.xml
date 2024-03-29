@@ -1110,7 +1110,7 @@
     <attribute name="exclude" default="" />
     <attribute name="filelist" default="" />
     <attribute name="testtag" default=""/>
-    <attribute name="usejacoco" default="no"/>
+    <attribute name="usejacoco" default="${usejacoco}"/>
     <attribute name="showoutput" default="false"/>
 
     <sequential>
@@ -1223,7 +1223,7 @@
   <macrodef name="testlist">
     <attribute name="test.file.list"/>
     <sequential>
-      <testmacrohelper inputdir="${test.dir}/${test.classlistprefix}" filelist="@{test.file.list}" exclude="**/*.java" timeout="${test.timeout}" usejacoco="${usejacoco}">
+      <testmacrohelper inputdir="${test.dir}/${test.classlistprefix}" filelist="@{test.file.list}" exclude="**/*.java" timeout="${test.timeout}">
         <jvmarg value="-Dlegacy-sstable-root=${test.data}/legacy-sstables"/>
         <jvmarg value="-Dinvalid-legacy-sstable-root=${test.data}/invalid-legacy-sstables"/>
         <jvmarg value="-Dcassandra.ring_delay_ms=1000"/>
@@ -1591,7 +1591,7 @@
       </executiondata>
       <structure name="JaCoCo Cassandara Coverage Report">
         <classfiles>
-          <fileset dir="${build.classes.main}">
+          <fileset dir="${jacoco.classdump.dir}">
             <include name="**/*.class"/>
           </fileset>
         </classfiles>
