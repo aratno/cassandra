@@ -1584,7 +1584,18 @@
     </jacoco:merge>
   </target>
 
-  <target name="jacoco-report" depends="jacoco-merge">
+  <target name="jacoco-prune" depends="jacoco-init,build-test">
+      <taskdef name="_jacoco-prune" classname="org.apache.cassandra.anttasks.JacocoPruning" classpath="${test.classes}">
+          <classpath>
+              <!-- Put main first so it's searched before JARs -->
+              <pathelement location="${build.classes.main}"/>
+              <path refid="cassandra.classpath.test"/>
+          </classpath>
+      </taskdef>
+    <_jacoco-prune/>
+  </target>
+
+  <target name="jacoco-report" depends="jacoco-merge,jacoco-prune">
     <jacoco:report xmlns:jacoco="antlib:org.jacoco.ant">
       <executiondata>
         <file file="${jacoco.finalexecfile}" />

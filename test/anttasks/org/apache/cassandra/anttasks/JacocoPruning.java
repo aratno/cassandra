@@ -16,30 +16,29 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.distributed.util;
+package org.apache.cassandra.anttasks;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.MalformedURLException;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.file.CopyOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.FileVisitor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.FileAttribute;
-import java.nio.file.attribute.PosixFileAttributes;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
+import org.apache.tools.ant.Project;
+import org.apache.tools.ant.Task;
 import org.jacoco.core.internal.data.CRC64;
 
 import org.slf4j.Logger;
@@ -50,31 +49,65 @@ import org.apache.cassandra.distributed.shared.Versions;
 /**
  * TODO: Document this.
  */
-public class JacocoClassIdFiltering
+public class JacocoPruning extends Task
 {
-    private static final Logger logger = LoggerFactory.getLogger(JacocoClassIdFiltering.class);
+    private static final Logger logger = LoggerFactory.getLogger(JacocoPruning.class);
 
-    private static final Path JACOCO_CLASSDUMP = Paths.get("build/jacoco/classdump");
-    private static final Path JACOCO_EXCLUSION_CLASSDUMP = Paths.get("build/jacoco/exclusionclassdump");
-    static {
-        new File(JACOCO_EXCLUSION_CLASSDUMP.toUri()).mkdir();
-    }
-
-    public static void main(String[] args) throws IOException, URISyntaxException
+    @Override
+    public void execute()
     {
-        final URL[] classpaths = Versions.getClassPath();
-
-        logger.info("Starting with classpath: {}", List.of(classpaths));
-
-        Set<Path> keepClassesWithIds = getLocalClassesWithJacocoIds(classpaths);
-
-        removedDumpedClassesExcept(classpaths, keepClassesWithIds);
-    }
-
-    private static void removedDumpedClassesExcept(URL[] classpaths, Set<Path> keepClassesWithIds) throws IOException
-    {
-        Files.walkFileTree(JACOCO_CLASSDUMP, new FileVisitor<>()
+        try
         {
+            Project project = getProject();
+
+            Path classdump = Paths.get(project.getProperty("jacoco.classdump.dir"));
+            logger.info("Pruning Jacoco classdump at: {}", classdump);
+
+            URL[] referenceClasspaths = Arrays.stream(project.getProperty("build.classes.main").split(","))
+                    .map(JacocoPruning::convert).collect(Collectors.toList())
+                    .toArray(new URL[]{});
+
+            logger.info("Using reference classes from local build classpath: {}", List.of(referenceClasspaths));
+
+            Set<Path> keepClassesWithIds = getLocalClassesWithJacocoIds(referenceClasspaths);
+
+            logger.trace("Keeping classes: {}", keepClassesWithIds);
+            if (keepClassesWithIds.isEmpty())
+                throw new RuntimeException("Could not find any classes to keep. Have you run a build?");
+
+            pruneClassdump(classdump, keepClassesWithIds);
+        }
+        catch (Exception e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static URL convert(String path)
+    {
+        try
+        {
+            return Paths.get(path).toUri().toURL();
+        }
+        catch (MalformedURLException e)
+        {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void pruneClassdump(Path classdump, Set<Path> keepClassesWithIds) throws IOException
+    {
+        // Make a separate directory for excluded classes, rather than deleting them directly
+        Path exclusionClassdump = classdump.getParent().resolve("exclclassdump");
+        assert new File(exclusionClassdump.toUri()).mkdir();
+
+        logger.info("Putting pruned classdump contents into {}", exclusionClassdump);
+
+        class CountingPruner implements FileVisitor<Path>
+        {
+            public long kept = 0;
+            public long pruned = 0;
+
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException
             {
@@ -88,15 +121,19 @@ public class JacocoClassIdFiltering
                     return FileVisitResult.CONTINUE;
 
                 // org/apache/cassandra/Klass.0123456789.class
-                Path classdumpWithId = JACOCO_CLASSDUMP.relativize(file);
+                Path classdumpWithId = classdump.relativize(file);
 
                 if (keepClassesWithIds.contains(classdumpWithId))
-                    logger.info("Keeping classdump for {}", classdumpWithId);
+                {
+                    logger.trace("Keeping classdump for {}", classdumpWithId);
+                    kept++;
+                }
                 else
                 {
-                    logger.info("Removing classdump for {}: {}", classdumpWithId, file.toAbsolutePath());
-                    Files.createDirectories(JACOCO_EXCLUSION_CLASSDUMP.resolve(classdumpWithId).getParent());
-                    Files.move(file, JACOCO_EXCLUSION_CLASSDUMP.resolve(classdumpWithId));
+                    logger.trace("Removing classdump for {}: {}", classdumpWithId, file.toAbsolutePath());
+                    Files.createDirectories(exclusionClassdump.resolve(classdumpWithId).getParent());
+                    Files.move(file, exclusionClassdump.resolve(classdumpWithId));
+                    pruned++;
                 }
 
                 return FileVisitResult.CONTINUE;
@@ -113,10 +150,15 @@ public class JacocoClassIdFiltering
             {
                 return FileVisitResult.CONTINUE;
             }
-        });
+        };
+        CountingPruner visitor = new CountingPruner();
+        Files.walkFileTree(classdump, visitor);
+
+        logger.info("Pruned {} files from classdump", visitor.pruned);
+        logger.info("Kept {} files from classdump", visitor.kept);
     }
 
-    private static Set<Path> getLocalClassesWithJacocoIds(URL[] classpaths) throws IOException, URISyntaxException
+    private Set<Path> getLocalClassesWithJacocoIds(URL[] classpaths) throws IOException, URISyntaxException
     {
         final URL[] localclasses = Arrays.stream(classpaths).filter(url -> {
             try
@@ -128,14 +170,14 @@ public class JacocoClassIdFiltering
                 return false;
             }
         }).toArray(URL[]::new);
-        logger.debug("Local classes: {}", List.of(localclasses));
+        logger.trace("Local classes: {}", List.of(localclasses));
 
         Set<Path> paths = new HashSet<>();
         try (URLClassLoader classloader = new URLClassLoader(classpaths))
         {
             for (URL localclassdir : List.of(localclasses))
             {
-                logger.debug("Checking local classes: {}", localclassdir);
+                logger.trace("Checking local classes: {}", localclassdir);
 
                 Files.walkFileTree(Paths.get(localclassdir.toURI()), new FileVisitor<>()
                 {
@@ -159,7 +201,7 @@ public class JacocoClassIdFiltering
                                            .replace('/', '.')
                                            .replace(".class", "");
 
-                        logger.debug("Got local class: {} {}", file, className);
+                        logger.trace("Got local class: {} {}", file, className);
 
                         byte[] classContent;
                         try (InputStream classContentStream = classloader.getResourceAsStream(classDiskName))
@@ -170,7 +212,7 @@ public class JacocoClassIdFiltering
 
                         // org/apache/cassandra/Klass.0123456789.class
                         final String classWithPathAndId = String.format("%s.%016x.class", className.replace('.', '/'), CRC64.classId(classContent));
-                        logger.debug("Got classId {} for class {}", classWithPathAndId, className);
+                        logger.trace("Got classId {} for class {}", classWithPathAndId, className);
                         paths.add(Paths.get(classWithPathAndId));
                         return FileVisitResult.CONTINUE;
                     }
