@@ -1584,7 +1584,10 @@
     </jacoco:merge>
   </target>
 
-  <target name="jacoco-prune" depends="jacoco-init,build-test">
+  <!--
+  Use no-jacoco-prune=true for python-dtests, since they don't produce a classdump (yet).
+  -->
+  <target name="jacoco-prune" depends="jacoco-init,build-test" unless="no-jacoco-prune">
       <taskdef name="_jacoco-prune" classname="org.apache.cassandra.anttasks.JacocoPruning" classpath="${test.classes}">
           <classpath>
               <!-- Put main first so it's searched before JARs -->

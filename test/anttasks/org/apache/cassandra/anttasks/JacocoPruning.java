@@ -44,10 +44,25 @@ import org.jacoco.core.internal.data.CRC64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.distributed.shared.Versions;
-
 /**
- * TODO: Document this.
+ * <p>Jacoco produces two types of data at runtime:
+ * <ol>
+ *      <li>Execution data, tracking which methods and instructions were executed during runtime, configured with jacoco.partialexecfile
+ *      <li>Classdump data, a dump of each class loaded while the Jacoco agent is running, configured with jacoco.classdump.dir
+ * </ol>
+ *
+ * <p>At analysis time, Jacoco merges the execution data and classdump data to produce reports.
+ *
+ * <p>Classdumps are necessary for Cassandra because our test run-time environment may differ from our build environment,
+ * especially with respect to bytecode interception used in our tests. Configuring a classdump is the best way to get
+ * accurate data from Jacoco, but we currently do not configure a classdump for our python-dtest suite. For the
+ * python-dtest suite, see the no-jacoco-prune system property in build.xml.
+ *
+ * <p> This class implements an Ant task to prune the classdump to only include the data we need. Specifically, it
+ * removes all classes that were loaded but don't need coverage analysis (including dependency libraries, test classes,
+ * and alternate jvm-dtest versions for upgrade tests).
+ *
+ * <p>Classdump data is stored in the package/Klass.id.class format, much like a build but with <a href="https://www.eclemma.org/jacoco/trunk/doc/classids.html">class IDs</a>.
  */
 public class JacocoPruning extends Task
 {
