@@ -306,7 +306,10 @@ public abstract class AbstractCluster<I extends IInstance> implements ICluster<I
         {
             ++generation;
             IClassTransformer transformer = classTransformer == null ? null : classTransformer.initialise();
-            // TODO: Document why this is necessary
+            // Use separate naming for current-version vs. alternate-version classloaders, since they will load classes
+            // with the same name but different content. This is incompatible with how Jacoco tracks code coverage, so
+            // we name classloaders and exclude the alternate-version classes from analysis with the Jacoco
+            // "exclclassloader" agent configuration.
             final boolean isCurrent = version.equals(AbstractCluster.CURRENT_VERSION);
             final String instanceClassLoaderName = String.format("%s-%s", isCurrent ? "current" : "alternate", version.version);
             ClassLoader classLoader = new InstanceClassLoader(generation, config.num(), version.classpath, sharedClassLoader, sharedClassPredicate, transformer) {
