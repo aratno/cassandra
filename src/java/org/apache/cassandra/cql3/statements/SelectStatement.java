@@ -32,8 +32,11 @@ import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.audit.AuditLogContext;
 import org.apache.cassandra.audit.AuditLogEntryType;
+import org.apache.cassandra.auth.AuthKeyspace;
 import org.apache.cassandra.auth.Permission;
 import org.apache.cassandra.db.guardrails.Guardrails;
+import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.schema.ColumnMetadata;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.SchemaConstants;
@@ -236,9 +239,46 @@ public class SelectStatement implements CQLStatement.SingleKeyspaceCqlStatement
             state.ensureTablePermission(table, Permission.SELECT);
         }
 
+        checkSensitiveColumns(state);
+
         for (Function function : getFunctions())
             state.ensurePermission(Permission.EXECUTE, function);
     }
+
+    private void checkSensitiveColumns(ClientState state)
+    {
+        if (state.isInternal)
+            return;
+
+        if (!isReferencingSaltedHash())
+            return;
+
+        if (!state.getUser().isSuper())
+        {
+            if (DatabaseDescriptor.getAllowNonSuperUserSelectSaltedHash())
+            {
+                String maskedStatement = String.format("column mapping = %s, table metadata = %s", this.getSelection().getColumnMapping(), this.table);
+                String userNullOrName = String.format("user%s", state.getUser() == null ? "=null" : String.format(".name=%s", state.getUser().getName()));
+                noSpamLogger.warn("Non-superuser SELECT statement references column salted_hash, which will be deprecated in a future release; statement={} {} remoteAddress={}", maskedStatement, userNullOrName, state.getRemoteAddress());
+            }
+            else
+            {
+                throw new UnauthorizedException("Cannot allow references to salted_hash column due config allow_nonsuperuser_select_salted_hash");
+            }
+        }
+    }
+
+    @VisibleForTesting
+    boolean isReferencingSaltedHash()
+    {
+        // Where possible, skip allocations required for column check below
+        if (!this.table.keyspace.equals(SchemaConstants.AUTH_KEYSPACE_NAME) || !this.table.name.equals(AuthKeyspace.ROLES))
+            return false;
+
+        // this.queriedColumns is a misnomer -- see differentiation between queried and fetched columns in ColumnFilter
+        return this.queriedColumns().queriedColumns().contains(ColumnMetadata.regularColumn(SchemaConstants.AUTH_KEYSPACE_NAME, AuthKeyspace.ROLES, "salted_hash", UTF8Type.instance));
+    }
+
 
     public void validate(ClientState state) throws InvalidRequestException
     {
