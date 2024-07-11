@@ -569,6 +569,9 @@ public class Config
     public volatile boolean auto_optimise_full_repair_streams = false;
     public volatile boolean auto_optimise_preview_repair_streams = false;
 
+    // Recommended to turn this to false, if no tools depend on access to the system_auth.roles salted_hash column directly
+    public volatile boolean allow_nonsuperuser_select_salted_hash = true;
+
     /**
      * Client mode means that the process is a pure client, that uses C* code base but does
      * not read or write local C* database files.

@@ -3486,4 +3486,14 @@ public class DatabaseDescriptor
             conf.force_new_prepared_statement_behaviour = value;
         }
     }
+
+    public static void setAllowNonSuperUserSelectSaltedHash(boolean allow)
+    {
+        conf.allow_nonsuperuser_select_salted_hash = allow;
+    }
+
+    public static boolean getAllowNonSuperUserSelectSaltedHash()
+    {
+        return conf.allow_nonsuperuser_select_salted_hash;
+    }
 }
