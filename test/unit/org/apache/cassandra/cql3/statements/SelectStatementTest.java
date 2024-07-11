@@ -23,14 +23,18 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.auth.AuthenticatedUser;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.CQLStatement;
 import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.db.Slices;
+import org.apache.cassandra.exceptions.UnauthorizedException;
 import org.apache.cassandra.schema.KeyspaceParams;
 import org.apache.cassandra.service.ClientState;
 
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 public class SelectStatementTest
 {
 
@@ -59,5 +63,57 @@ public class SelectStatementTest
         Assert.assertEquals(Slices.NONE, parseSelect("SELECT * FROM ks.tbl WHERE k=100 AND c > 10 AND c <= 10").makeSlices(QueryOptions.DEFAULT));
         Assert.assertEquals(Slices.NONE, parseSelect("SELECT * FROM ks.tbl WHERE k=100 AND c < 10 AND c >= 10").makeSlices(QueryOptions.DEFAULT));
         Assert.assertEquals(Slices.NONE, parseSelect("SELECT * FROM ks.tbl WHERE k=100 AND c < 10 AND c > 10").makeSlices(QueryOptions.DEFAULT));
+    }
+
+    @Test(expected = UnauthorizedException.class)
+    public void testNonSuperUserUnauthorized()
+    {
+        DatabaseDescriptor.setAllowNonSuperUserSelectSaltedHash(false);
+
+        ClientState mockClientState = mock(ClientState.class);
+        AuthenticatedUser mockUser = mock(AuthenticatedUser.class);
+        when(mockUser.isSuper()).thenReturn(false);
+        when(mockClientState.getUser()).thenReturn(mockUser);
+
+        String query = "SELECT * FROM system_auth.roles;";
+        SelectStatement selectStatement = parseSelect(query);
+        selectStatement.authorize(mockClientState);
+    }
+
+    @Test
+    public void testNonSuperUserAuthorized()
+    {
+        // Default: non-superusers can access column
+        DatabaseDescriptor.setAllowNonSuperUserSelectSaltedHash(true);
+
+        ClientState mockClientState = mock(ClientState.class);
+        AuthenticatedUser mockUser = mock(AuthenticatedUser.class);
+        when(mockUser.isSuper()).thenReturn(false);
+        when(mockUser.getName()).thenReturn("test_user");
+        when(mockClientState.getUser()).thenReturn(mockUser);
+
+        String query = "SELECT * FROM system_auth.roles;";
+        SelectStatement selectStatement = parseSelect(query);
+        selectStatement.authorize(mockClientState);
+    }
+
+    @Test
+    public void testReferencingSaltedHash()
+    {
+        String query1 = "SELECT role, can_login, is_superuser, member_of FROM system_auth.roles;";
+        SelectStatement selectStatement1 = parseSelect(query1);
+        Assert.assertFalse(selectStatement1.isReferencingSaltedHash());
+
+        String query2 = "SELECT * FROM system_auth.roles;";
+        SelectStatement selectStatement2 = parseSelect(query2);
+        Assert.assertTrue(selectStatement2.isReferencingSaltedHash());
+
+        String query3 = "SELECT salted_hash FROM system_auth.roles;";
+        SelectStatement selectStatement3 = parseSelect(query3);
+        Assert.assertTrue(selectStatement3.isReferencingSaltedHash());
+
+        String query4 = "SELECT JSON * FROM system_auth.roles;";
+        SelectStatement selectStatement4 = parseSelect(query4);
+        Assert.assertTrue(selectStatement4.isReferencingSaltedHash());
     }
 }
