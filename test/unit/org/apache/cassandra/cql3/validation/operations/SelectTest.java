@@ -20,19 +20,36 @@ package org.apache.cassandra.cql3.validation.operations;
 import java.nio.ByteBuffer;
 import java.util.UUID;
 
+import com.google.common.collect.Iterables;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
+import org.apache.cassandra.SchemaLoader;
+import org.apache.cassandra.auth.AuthKeyspace;
+import org.apache.cassandra.auth.AuthenticatedUser;
+import org.apache.cassandra.config.CFMetaData;
+import org.apache.cassandra.config.DatabaseDescriptor;
+import org.apache.cassandra.cql3.CQLStatement;
 import org.apache.cassandra.cql3.CQLTester;
+import org.apache.cassandra.cql3.QueryProcessor;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.cql3.restrictions.StatementRestrictions;
+import org.apache.cassandra.cql3.statements.ParsedStatement;
+import org.apache.cassandra.cql3.statements.SelectStatement;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 
 import static org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER;
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import junit.framework.Assert;
+import org.apache.cassandra.exceptions.UnauthorizedException;
+import org.apache.cassandra.schema.KeyspaceParams;
+import org.apache.cassandra.service.ClientState;
 
 /**
  * Test column ranges and ordering with static column in table
@@ -2943,5 +2960,78 @@ public class SelectTest extends CQLTester
                              "SELECT WRITETIME(column1) FROM %s");
         assertInvalidMessage("Undefined name value in selection clause",
                              "SELECT WRITETIME(value) FROM %s");
+    }
+
+    @Test(expected = UnauthorizedException.class)
+    public void testNonSuperUserUnauthorized()
+    {
+        DatabaseDescriptor.setAllowNonSuperUserSelectSaltedHash(false);
+
+        ClientState mockClientState = mock(ClientState.class);
+        AuthenticatedUser mockUser = mock(AuthenticatedUser.class);
+        when(mockUser.isSuper()).thenReturn(false);
+        when(mockClientState.getUser()).thenReturn(mockUser);
+
+        String query = "SELECT * FROM system_auth.roles;";
+        SelectStatement selectStatement = parseSelect(query);
+        selectStatement.checkAccess(mockClientState);
+    }
+
+    @Test
+    public void testNonSuperUserAuthorized()
+    {
+        // Default: non-superusers can access column
+        DatabaseDescriptor.setAllowNonSuperUserSelectSaltedHash(true);
+
+        ClientState mockClientState = mock(ClientState.class);
+        AuthenticatedUser mockUser = mock(AuthenticatedUser.class);
+        when(mockUser.isSuper()).thenReturn(false);
+        when(mockUser.getName()).thenReturn("test_user");
+        when(mockClientState.getUser()).thenReturn(mockUser);
+
+        String query = "SELECT * FROM system_auth.roles;";
+        SelectStatement selectStatement = parseSelect(query);
+        selectStatement.checkAccess(mockClientState);
+    }
+
+    @Test
+    public void testReferencingSaltedHash()
+    {
+        String query1 = "SELECT role, can_login, is_superuser, member_of FROM system_auth.roles;";
+        SelectStatement selectStatement1 = parseSelect(query1);
+        Assert.assertFalse(selectStatement1.isReferencingSaltedHash());
+
+        String query2 = "SELECT * FROM system_auth.roles;";
+        SelectStatement selectStatement2 = parseSelect(query2);
+        Assert.assertTrue(selectStatement2.isReferencingSaltedHash());
+
+        String query3 = "SELECT salted_hash FROM system_auth.roles;";
+        SelectStatement selectStatement3 = parseSelect(query3);
+        Assert.assertTrue(selectStatement3.isReferencingSaltedHash());
+
+        String query4 = "SELECT JSON * FROM system_auth.roles;";
+        SelectStatement selectStatement4 = parseSelect(query4);
+        Assert.assertTrue(selectStatement4.isReferencingSaltedHash());
+    }
+
+    private static SelectStatement parseSelect(String query)
+    {
+        ParsedStatement.Prepared prepared = QueryProcessor.parseStatement(query).prepare(ClientState.forInternalCalls());
+        assert prepared.statement instanceof SelectStatement;
+        return (SelectStatement) prepared.statement;
+    }
+
+    @BeforeClass
+    public static void setUp()
+    {
+        SchemaLoader.createKeyspace(AuthKeyspace.NAME,
+                                    KeyspaceParams.simple(1),
+                                    Iterables.toArray(AuthKeyspace.metadata().tables, CFMetaData.class));
+    }
+
+    @AfterClass
+    public static void tearDown()
+    {
+        schemaChange("DROP KEYSPACE " + AuthKeyspace.NAME);
     }
 }
