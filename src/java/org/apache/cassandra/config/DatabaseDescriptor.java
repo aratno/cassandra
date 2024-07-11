@@ -4917,4 +4917,14 @@ public class DatabaseDescriptor
     {
         return conf == null ? new RepairRetrySpec() : conf.repair.retries;
     }
+
+    public static void setAllowNonSuperUserSelectSaltedHash(boolean allow)
+    {
+        conf.allow_nonsuperuser_select_salted_hash = allow;
+    }
+
+    public static boolean getAllowNonSuperUserSelectSaltedHash()
+    {
+        return conf.allow_nonsuperuser_select_salted_hash;
+    }
 }
