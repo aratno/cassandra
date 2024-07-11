@@ -27,15 +27,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableSet;
 import java.util.SortedSet;
+import java.util.concurrent.TimeUnit;
 
 import com.google.common.base.MoreObjects;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Objects;
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.auth.AuthKeyspace;
 import org.apache.cassandra.auth.Permission;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
+import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.cql3.CFName;
 import org.apache.cassandra.cql3.CQLStatement;
 import org.apache.cassandra.cql3.ColumnIdentifier;
@@ -98,6 +105,7 @@ import org.apache.cassandra.transport.ProtocolVersion;
 import org.apache.cassandra.transport.messages.ResultMessage;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.NoSpamLogger;
 
 import static org.apache.cassandra.cql3.statements.RequestValidations.checkFalse;
 import static org.apache.cassandra.cql3.statements.RequestValidations.checkNotNull;
@@ -117,6 +125,7 @@ import static org.apache.cassandra.utils.ByteBufferUtil.UNSET_BYTE_BUFFER;
 public class SelectStatement implements CQLStatement
 {
     private static final Logger logger = LoggerFactory.getLogger(SelectStatement.class);
+    private static final NoSpamLogger nospam1m = NoSpamLogger.getLogger(logger, 1, TimeUnit.MINUTES);
 
     public static final int DEFAULT_PAGE_SIZE = 10000;
 
@@ -259,8 +268,44 @@ public class SelectStatement implements CQLStatement
             state.hasColumnFamilyAccess(cfm, Permission.SELECT);
         }
 
+        checkSensitiveColumns(state);
+
         for (Function function : getFunctions())
             state.ensureHasPermission(Permission.EXECUTE, function);
+    }
+
+    private void checkSensitiveColumns(ClientState state)
+    {
+        if (state.isInternal)
+            return;
+
+        if (!isReferencingSaltedHash())
+            return;
+
+        if (!state.getUser().isSuper())
+        {
+            if (DatabaseDescriptor.getAllowNonSuperUserSelectSaltedHash())
+            {
+                String maskedStatement = String.format("column mapping = %s, table metadata = %s", this.getSelection().getColumnMapping(), this.cfm);
+                String userNullOrName = String.format("user%s", state.getUser() == null ? "=null" : String.format(".name=%s", state.getUser().getName()));
+                nospam1m.warn("Non-superuser SELECT statement references column salted_hash, which will be deprecated in a future release; statement={} {} remoteAddress={}", maskedStatement, userNullOrName, state.getRemoteAddress());
+            }
+            else
+            {
+                throw new UnauthorizedException("Cannot allow references to salted_hash column due config allow_nonsuperuser_select_salted_hash");
+            }
+        }
+    }
+
+    @VisibleForTesting
+    public boolean isReferencingSaltedHash()
+    {
+        // Where possible, skip allocations required for column check below
+        if (!this.keyspace().equals(AuthKeyspace.NAME) || !this.cfm.cfName.equals(AuthKeyspace.ROLES))
+            return false;
+
+        ColumnDefinition saltedHashColumn = this.cfm.getColumnDefinition(new ColumnIdentifier("salted_hash", true));
+        return this.selection.getColumns().contains(saltedHashColumn);
     }
 
     public void validate(ClientState state) throws InvalidRequestException

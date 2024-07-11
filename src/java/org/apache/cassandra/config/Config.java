@@ -434,6 +434,10 @@ public class Config
     public volatile boolean check_for_duplicate_rows_during_compaction = true;
 
     public volatile boolean force_new_prepared_statement_behaviour = false;
+
+    // Recommended to turn this to false, if no tools depend on access to the system_auth.roles salted_hash column directly
+    public volatile boolean allow_nonsuperuser_select_salted_hash = true;
+
     /**
      * Client mode means that the process is a pure client, that uses C* code base but does
      * not read or write local C* database files.
