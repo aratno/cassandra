@@ -16,12 +16,16 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.audit;
+package org.apache.cassandra.utils;
 
-/**
- * Enum to categorize AuditLogEntries
- */
-public enum AuditLogEntryCategory
+import java.lang.reflect.Method;
+import javax.security.auth.Subject;
+
+public interface JmxInvocationListener
 {
-    QUERY, DML, DDL, DCL, OTHER, AUTH, ERROR, PREPARE, JMX
+    default void onInvocation(Subject subject, Method method, Object[] args)
+    {}
+
+    default void onRejection(Subject subject, Method method, Object[] args, String reason)
+    {}
 }

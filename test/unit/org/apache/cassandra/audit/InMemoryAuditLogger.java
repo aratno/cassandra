@@ -25,7 +25,8 @@ import com.google.common.annotations.VisibleForTesting;
 
 public class InMemoryAuditLogger implements IAuditLogger
 {
-    final Queue<AuditLogEntry> inMemQueue = new LinkedList<>();
+    @VisibleForTesting
+    public final Queue<AuditLogEntry> inMemQueue = new LinkedList<>();
     private boolean enabled = true;
 
     public InMemoryAuditLogger(Map<String, String> params)
