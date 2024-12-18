@@ -153,7 +153,6 @@ public class AuthorizationProxy implements InvocationHandler
         // Retrieve Subject from current AccessControlContext
         AccessControlContext acc = AccessController.getContext();
         Subject subject = Subject.getSubject(acc);
-        logger.info("CHECKPOINT {}", subject);
 
         try
         {
@@ -191,7 +190,7 @@ public class AuthorizationProxy implements InvocationHandler
         }
         catch (Exception e)
         {
-            listener.onRejection(subject, method, args, e.getMessage());
+            listener.onFailure(subject, method, args, e.getMessage());
             throw e;
         }
     }

@@ -882,7 +882,7 @@ public class AuditLoggerTest extends CQLTester
         // 2 JMX calls are produced, one to search for class, then one to invoke
         logEntry = ((InMemoryAuditLogger) AuditLogManager.instance.getLogger()).inMemQueue.poll();
         assertEquals(AuditLogEntryType.JMX, logEntry.getType());
-        assertThat(logEntry.getOperation(), stringContainsInOrder("JMX REJECTION", "setAttribute"));
+        assertThat(logEntry.getOperation(), stringContainsInOrder("JMX FAILURE", "setAttribute"));
         if (enableAuthorizationProxy)
             assertThat(logEntry.getUser(), is("CassandraPrincipal: test_role"));
         else

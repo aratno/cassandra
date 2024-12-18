@@ -31,7 +31,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
@@ -430,14 +429,9 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
 
         private static String method(Method method, Object[] args)
         {
-            Function<Object, String> fmt = obj -> {
-                if (obj == null)
-                    return "null";
-                return obj.toString();
-            };
             String argsFmt = "";
             if (args != null)
-                argsFmt = Arrays.stream(args).map(fmt).collect(Collectors.joining(", "));
+                argsFmt = Arrays.stream(args).map(Objects::toString).collect(Collectors.joining(", "));
             return String.format("%s#%s(%s)", method.getDeclaringClass().getCanonicalName(), method.getName(), argsFmt);
         }
     }
@@ -456,13 +450,13 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
     }
 
     @Override
-    public void onRejection(Subject subject, Method method, Object[] args, String reason)
+    public void onFailure(Subject subject, Method method, Object[] args, String reason)
     {
         if (filter.isFiltered(AuditLogEntryCategory.JMX))
             return;
 
         AuditLogEntry entry = new AuditLogEntry.Builder(JMX)
-                              .setOperation(String.format("JMX REJECTION: %s due to %s", JmxFormatter.method(method, args), reason))
+                              .setOperation(String.format("JMX FAILURE: %s due to %s", JmxFormatter.method(method, args), reason))
                               .setUser(JmxFormatter.user(subject))
                               .build();
         log(entry);
@@ -501,7 +495,7 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
             catch (InvocationTargetException e)
             {
                 Throwable cause = e.getCause();
-                AuditLogManager.instance.onRejection(subject, method, args, cause.getMessage());
+                AuditLogManager.instance.onFailure(subject, method, args, cause.getMessage());
                 throw cause;
             }
         }

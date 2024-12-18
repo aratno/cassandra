@@ -26,6 +26,6 @@ public interface JmxInvocationListener
     default void onInvocation(Subject subject, Method method, Object[] args)
     {}
 
-    default void onRejection(Subject subject, Method method, Object[] args, String reason)
+    default void onFailure(Subject subject, Method method, Object[] args, String reason)
     {}
 }

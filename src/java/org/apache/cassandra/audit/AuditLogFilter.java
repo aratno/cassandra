@@ -127,7 +127,7 @@ final class AuditLogFilter
     }
 
     /**
-     * Checks whether a give AuditLogEntryCategory is filtered or not.
+     * Checks whether a given AuditLogEntryCategory is filtered or not.
      *
      * This is useful when creating an audit log entry might be expensive, and checking the category before formatting
      * is less costly.
@@ -141,7 +141,7 @@ final class AuditLogFilter
     }
 
     /**
-     * Checks whether a give AuditLog Entry is filtered or not
+     * Checks whether a given AuditLog Entry is filtered or not
      *
      * @param auditLogEntry AuditLogEntry to verify
      * @return true if it is filtered, false otherwise

@@ -82,7 +82,7 @@ public abstract class AbstractJMXAuthTest extends CQLTester
         tableMBean = JMXResource.mbean(String.format("org.apache.cassandra.db:type=Tables,keyspace=%s,table=%s",
                                                      KEYSPACE, tableName));
         AuditLogManager.instance.enable(DatabaseDescriptor.getAuditLoggingOptions());
-        auditLogs = ((InMemoryAuditLogger) AuditLogManager.instance.getLogger()).inMemQueue;
+        auditLogs = ((InMemoryAuditLogger) AuditLogManager.instance.getLogger()).internalQueue();
     }
 
     @Test
@@ -245,7 +245,7 @@ public abstract class AbstractJMXAuthTest extends CQLTester
             AuditLogEntry entry = nextAuditEvent(auditLogs);
             Assertions.assertThat(entry.getType()).isSameAs(AuditLogEntryType.JMX);
             Assertions.assertThat(entry.getUser()).contains(role.getRoleName());
-            Assertions.assertThat(entry.getOperation()).contains("JMX REJECTION");
+            Assertions.assertThat(entry.getOperation()).contains("JMX FAILURE");
             Assertions.assertThat(entry.getOperation()).contains(e.getLocalizedMessage());
         }
     }
