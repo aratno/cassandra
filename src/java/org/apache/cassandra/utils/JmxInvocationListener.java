@@ -21,11 +21,30 @@ package org.apache.cassandra.utils;
 import java.lang.reflect.Method;
 import javax.security.auth.Subject;
 
+/**
+ * Listener for operations executed over JMX.
+ */
 public interface JmxInvocationListener
 {
+    /**
+     * Listener called when an attempted invocation is successful.
+     *
+     * @param subject The subject attempting invocation, depends on how JMX authentication is configured
+     * @param method Invoked method
+     * @param args Invoked method arguments
+     */
     default void onInvocation(Subject subject, Method method, Object[] args)
     {}
 
-    default void onFailure(Subject subject, Method method, Object[] args, String reason)
+    /**
+     * Listener called when an attempted invocation throws an exception. This could happen before or after the
+     * underlying method is invoked, due to invocation wrappers such as {@link org.apache.cassandra.auth.jmx.AuthorizationProxy#invoke(Object, Method, Object[])}.
+     *
+     * @param subject The subject attempting invocation, depends on how JMX authentication is configured
+     * @param method Invoked method
+     * @param args Invoked method arguments
+     * @param cause Exception thrown by the attempted invocation
+     */
+    default void onFailure(Subject subject, Method method, Object[] args, Exception cause)
     {}
 }

@@ -190,7 +190,7 @@ public class AuthorizationProxy implements InvocationHandler
         }
         catch (Exception e)
         {
-            listener.onFailure(subject, method, args, e.getMessage());
+            listener.onFailure(subject, method, args, e);
             throw e;
         }
     }

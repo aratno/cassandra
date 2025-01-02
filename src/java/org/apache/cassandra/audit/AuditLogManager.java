@@ -460,18 +460,17 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
     }
 
     @Override
-    public void onFailure(Subject subject, Method method, Object[] args, String reason)
+    public void onFailure(Subject subject, Method method, Object[] args, Exception exception)
     {
         if (filter.isFiltered(AuditLogEntryCategory.JMX))
             return;
 
         AuditLogEntry entry = new AuditLogEntry.Builder(JMX)
-                              .setOperation(String.format("JMX FAILURE: %s due to %s", JmxFormatter.method(method, args), reason))
+                              .setOperation(String.format("JMX FAILURE: %s due to %s", JmxFormatter.method(method, args), exception.getClass().getSimpleName()))
                               .setUser(JmxFormatter.user(subject))
                               .build();
-        log(entry);
+        log(entry, exception);
     }
-
 
     private class JmxHandler implements InvocationHandler
     {
@@ -481,7 +480,7 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable
         {
             // See AuthorizationProxy.invoke
-            if (("setMBeanServer").equals(method.getName()))
+            if ("setMBeanServer".equals(method.getName()))
             {
                 if (args[0] == null)
                     throw new IllegalArgumentException("Null MBeanServer");
@@ -504,9 +503,8 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
             }
             catch (InvocationTargetException e)
             {
-                Throwable cause = e.getCause();
-                AuditLogManager.instance.onFailure(subject, method, args, cause.getMessage());
-                throw cause;
+                AuditLogManager.instance.onFailure(subject, method, args, e);
+                throw e.getCause();
             }
         }
     }
