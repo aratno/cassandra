@@ -25,13 +25,13 @@ import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.security.AccessControlContext;
 import java.security.AccessController;
+import java.security.Principal;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 import javax.management.MBeanServer;
@@ -424,14 +424,24 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
     {
         private static String user(Subject subject)
         {
-            return String.format("%s", subject == null ? null : subject.getPrincipals().stream().map(Objects::toString).collect(Collectors.joining(", ")));
+            if (subject == null)
+                return "null";
+            StringJoiner joiner = new StringJoiner(", ");
+            for (Principal principal : subject.getPrincipals())
+                joiner.add(Objects.toString(principal));
+            return joiner.toString();
         }
 
         private static String method(Method method, Object[] args)
         {
             String argsFmt = "";
             if (args != null)
-                argsFmt = Arrays.stream(args).map(Objects::toString).collect(Collectors.joining(", "));
+            {
+                StringJoiner joiner = new StringJoiner(", ");
+                for (Object arg : args)
+                    joiner.add(Objects.toString(arg));
+                argsFmt = joiner.toString();
+            }
             return String.format("%s#%s(%s)", method.getDeclaringClass().getCanonicalName(), method.getName(), argsFmt);
         }
     }
@@ -503,8 +513,8 @@ public class AuditLogManager implements QueryEvents.Listener, AuthEvents.Listene
 
     private MBeanServerForwarder createMBeanServerForwarder()
     {
-        final InvocationHandler handler = new JmxHandler();
-        final Class<?>[] interfaces = { MBeanServerForwarder.class };
+        InvocationHandler handler = new JmxHandler();
+        Class<?>[] interfaces = { MBeanServerForwarder.class };
         Object proxy = Proxy.newProxyInstance(MBeanServerForwarder.class.getClassLoader(), interfaces, handler);
         return (MBeanServerForwarder) proxy;
     }
