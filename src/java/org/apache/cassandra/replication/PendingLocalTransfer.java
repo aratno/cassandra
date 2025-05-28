@@ -27,8 +27,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.CoordinatorLogBoundaries;
-import org.apache.cassandra.db.CoordinatorLogBoundariesBuilder;
 import org.apache.cassandra.db.streaming.CassandraStreamReceiver;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
@@ -69,7 +67,7 @@ public class PendingLocalTransfer
      * TODO: Clear out the row cache and counter cache, like {@link CassandraStreamReceiver#finished}.
      * TODO: Don't add to the live set if coordinator and not an owner for the range
      */
-    public void activate(ShortMutationId transferId)
+    public void activate(MutationId transferId)
     {
         logger.info("Activating transfer {}, {} ms since pending", this, currentTimeMillis() - createdAt);
         ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(tableId);
@@ -78,16 +76,15 @@ public class PendingLocalTransfer
         // Ensure no lingering mutation IDs, only transfer IDs
         for (SSTableReader sstable : sstables)
         {
-            Preconditions.checkState(sstable.getCoordinatorLogBoundaries().isEmpty());
+            Preconditions.checkState(sstable.getCoordinatorLogOffsets().isEmpty());
 
             // Modify SSTables metadata to durably set transfer ID before importing
-            // TODO: Update to CoordinatorLogOffsets on rebase
-            CoordinatorLogBoundaries boundaries = new CoordinatorLogBoundariesBuilder()
+            ImmutableCoordinatorLogOffsets logOffsets = new ImmutableCoordinatorLogOffsets.Builder()
                                                   .add(transferId)
                                                   .build();
             try
             {
-                sstable.mutateCoordinatorLogBoundariesAndReload(boundaries);
+                sstable.mutateCoordinatorLogOffsetsAndReload(logOffsets);
             }
             catch (IOException e)
             {

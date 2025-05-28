@@ -259,7 +259,7 @@ public class ReadExecutionController implements AutoCloseable
         for (SSTableReader sstable : view.sstables)
         {
             // TODO(rebase): once we switch to CoordinatorLogOffsets, collect all transfer IDs here
-            // transferIds.addAll(sstable.getCoordinatorLogBoundaries());
+            // transferIds.addAll(sstable.getCoordinatorLogOffsets());
         }
     }
 

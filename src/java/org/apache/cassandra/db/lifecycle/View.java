@@ -308,8 +308,8 @@ public class View
                 /**
                  * When SSTables are added, need to update BulkShards to include the new transfers
                  *
-                 * We need to make sure that the live set used for a read (View#sstables) has CoordinatorLogBoundaries that's
-                 * reflected in any summary.
+                 * We need to make sure that the live set used for a read (View#sstables) has CoordinatorLogOffsets
+                 * that's reflected in any summary.
                  *
                  * TODO: Never mark something as live if it isn't in a data directory, since a bounce would mark it no
                  * longer live.

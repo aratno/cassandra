@@ -16,31 +16,28 @@
  * limitations under the License.
  */
 
-package org.apache.cassandra.db;
+package org.apache.cassandra.replication;
 
-import org.apache.cassandra.replication.MutationId;
+import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 
-public interface MutableCoordinatorLogBoundaries extends CoordinatorLogBoundaries
+/**
+ * Mutation ID offsets present in this SSTable for each coordinator log, to determine whether an SSTable is reconciled
+ * or not.
+ * <p>
+ * Note that peers may have reconciled all mutations included in an SSTable, but {@link StatsMetadata#repairedAt} is
+ * dependent on compaction timing, so "nodetool repair --validate" may report temporary disagreements on the repaired
+ * set.
+ * <p>
+ * Iterable over {@link CoordinatorLogId}.
+ */
+public interface CoordinatorLogOffsets<O extends Offsets> extends Iterable<Long>
 {
-    void add(MutationId mutationId);
-
-    default void addAll(CoordinatorLogBoundaries from)
+    O offsets(long logId);
+    int size();
+    default boolean isEmpty()
     {
-        for (long logId : from)
-        {
-            MutationId max = from.max(logId);
-            if (!max.isNone())
-                add(max);
-        }
+        return size() == 0;
     }
 
-    static MutableCoordinatorLogBoundaries create()
-    {
-        return new CoordinatorLogBoundariesMap();
-    }
-
-    static MutableCoordinatorLogBoundaries create(int size)
-    {
-        return new CoordinatorLogBoundariesMap(size);
-    }
+    ImmutableCoordinatorLogOffsets NONE = new ImmutableCoordinatorLogOffsets.Builder(0).build();
 }

@@ -33,7 +33,6 @@ import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.db.CoordinatorLogBoundaries;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
 import org.apache.cassandra.io.sstable.Descriptor;
@@ -46,6 +45,7 @@ import org.apache.cassandra.io.util.DataOutputStreamPlus;
 import org.apache.cassandra.io.util.File;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.io.util.RandomAccessReader;
+import org.apache.cassandra.replication.ImmutableCoordinatorLogOffsets;
 import org.apache.cassandra.utils.TimeUUID;
 
 import static org.apache.cassandra.utils.FBUtilities.updateChecksumInt;
@@ -250,12 +250,12 @@ public class MetadataSerializer implements IMetadataSerializer
     }
 
     @Override
-    public void mutateCoordinatorLogBoundaries(Descriptor descriptor, CoordinatorLogBoundaries boundaries) throws IOException
+    public void mutateCoordinatorLogOffsets(Descriptor descriptor, ImmutableCoordinatorLogOffsets logOffsets) throws IOException
     {
         if (logger.isTraceEnabled())
-            logger.trace("Mutating {} to {}", descriptor.fileFor(Components.STATS), boundaries);
+            logger.trace("Mutating {} to {}", descriptor.fileFor(Components.STATS), logOffsets);
 
-        mutate(descriptor, stats -> stats.mutateCoordinatorLogBoundaries(boundaries));
+        mutate(descriptor, stats -> stats.mutateCoordinatorLogOffsets(logOffsets));
     }
 
     private void mutate(Descriptor descriptor, UnaryOperator<StatsMetadata> transform) throws IOException

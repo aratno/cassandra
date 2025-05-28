@@ -23,7 +23,6 @@ import java.util.function.IntSupplier;
 
 import com.google.common.base.Preconditions;
 
-import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.db.ReadExecutionController;
@@ -38,15 +37,15 @@ import org.jctools.maps.NonBlockingHashMapLong;
 
 public class Shard
 {
-    // TODO: Revert to private
+    // TODO: private
     final Range<Token> tokenRange;
-    protected final String keyspace;
-    protected final int localHostId;
-    protected final Participants participants;
-    protected final Epoch sinceEpoch;
-    protected final NonBlockingHashMapLong<CoordinatorLog> logs;
+    final Participants participants;
+    private final String keyspace;
+    private final int localHostId;
+    private final Epoch sinceEpoch;
+    private final NonBlockingHashMapLong<CoordinatorLog> logs;
     // TODO (expected): add support for log rotation
-    protected final CoordinatorLog.CoordinatorLogPrimary currentLocalLog;
+    private final CoordinatorLog.CoordinatorLogPrimary currentLocalLog;
 
     /**
      * This log exists to assign transfer IDs within the current shard.
@@ -65,6 +64,7 @@ public class Shard
         Preconditions.checkArgument(participants.contains(localHostId));
 
         this.keyspace = keyspace;
+        this.tokenRange = tokenRange;
         this.localHostId = localHostId;
         this.participants = participants;
         this.sinceEpoch = sinceEpoch;
@@ -78,52 +78,11 @@ public class Shard
         CoordinatorLogId transferLogId = currentTransferLog.logId;
         Preconditions.checkArgument(!transferLogId.isNone());
         logs.put(transferLogId.asLong(), currentLocalLog);
-        this.tokenRange = tokenRange;
     }
 
     MutationId nextId()
     {
         return currentLocalLog.nextId();
-    }
-
-    List<InetAddressAndPort> remoteReplicas()
-    {
-        List<InetAddressAndPort> replicas = new ArrayList<>(participants.size() - 1);
-        for (int i = 0, size = participants.size(); i < size; ++i)
-        {
-            int hostId = participants.get(i);
-            if (hostId != localHostId)
-                replicas.add(ClusterMetadata.current().directory.endpoint(new NodeId(hostId)));
-        }
-        return replicas;
-    }
-
-    /**
-     * Creates a new coordinator log for this host. Primarily on Shard init (node startup or topology change).
-     * Also on keyspace creation.
-     */
-    protected static CoordinatorLog.CoordinatorLogPrimary startNewLog(int localHostId, int hostLogId, Participants participants)
-    {
-        CoordinatorLogId logId = new CoordinatorLogId(localHostId, hostLogId);
-        return new CoordinatorLog.CoordinatorLogPrimary(localHostId, logId, participants);
-    }
-
-    protected CoordinatorLog getOrCreate(MutationId mutationId)
-    {
-        Preconditions.checkArgument(!mutationId.isNone());
-        return getOrCreate(mutationId.logId());
-    }
-
-    protected CoordinatorLog getOrCreate(CoordinatorLogId logId)
-    {
-        return getOrCreate(logId.asLong());
-    }
-
-    protected CoordinatorLog getOrCreate(long logId)
-    {
-        CoordinatorLog log = logs.get(logId);
-        return log != null
-               ? log : logs.computeIfAbsent(logId, ignore -> CoordinatorLog.create(localHostId, new CoordinatorLogId(logId), participants));
     }
 
     void receivedWriteResponse(MutationId mutationId, InetAddressAndPort onHost)
@@ -165,6 +124,18 @@ public class Shard
         });
     }
 
+    List<InetAddressAndPort> remoteReplicas()
+    {
+        List<InetAddressAndPort> replicas = new ArrayList<>(participants.size() - 1);
+        for (int i = 0, size = participants.size(); i < size; ++i)
+        {
+            int hostId = participants.get(i);
+            if (hostId != localHostId)
+                replicas.add(ClusterMetadata.current().directory.endpoint(new NodeId(hostId)));
+        }
+        return replicas;
+    }
+
     /**
      * Collects replicated offsets for the logs owned by this coordinator on this shard.
      */
@@ -179,5 +150,51 @@ public class Shard
         }
 
         return new ShardReplicatedOffsets(keyspace, tokenRange, offsets);
+    }
+
+    /**
+     * Creates a new coordinator log for this host. Primarily on Shard init (node startup or topology change).
+     * Also on keyspace creation.
+     */
+    private static CoordinatorLog.CoordinatorLogPrimary startNewLog(int localHostId, int hostLogId, Participants participants)
+    {
+        CoordinatorLogId logId = new CoordinatorLogId(localHostId, hostLogId);
+        return new CoordinatorLog.CoordinatorLogPrimary(localHostId, logId, participants);
+    }
+
+    private CoordinatorLog getOrCreate(MutationId mutationId)
+    {
+        Preconditions.checkArgument(!mutationId.isNone());
+        return getOrCreate(mutationId.logId());
+    }
+
+    private CoordinatorLog getOrCreate(CoordinatorLogId logId)
+    {
+        return getOrCreate(logId.asLong());
+    }
+
+    private CoordinatorLog getOrCreate(long logId)
+    {
+        CoordinatorLog log = logs.get(logId);
+        if (log != null)
+            return log;
+        CoordinatorLog newLog = logs.computeIfAbsent(logId, ignore -> CoordinatorLog.create(localHostId, new CoordinatorLogId(logId), participants));
+        for (Subscriber subscriber : subscribers)
+            subscriber.onLogCreation(newLog);
+        return newLog;
+    }
+
+    private final List<Subscriber> subscribers = new ArrayList<>();
+
+    public interface Subscriber
+    {
+        default void onLogCreation(CoordinatorLog log) {}
+        default void onSubscribe(CoordinatorLog currentLog) {}
+    }
+
+    public void addSubscriber(Subscriber subscriber)
+    {
+        subscriber.onSubscribe(currentLocalLog);
+        subscribers.add(subscriber);
     }
 }
