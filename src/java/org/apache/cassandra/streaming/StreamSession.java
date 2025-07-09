@@ -68,6 +68,7 @@ import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.locator.RangesAtEndpoint;
 import org.apache.cassandra.locator.Replica;
 import org.apache.cassandra.metrics.StreamingMetrics;
+import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.service.ActiveRepairService;
 import org.apache.cassandra.service.StorageService;
@@ -210,6 +211,7 @@ public class StreamSession
 
     private final TimeUUID pendingRepair;
     private final PreviewKind previewKind;
+    private final MutationId transferId;
 
     public String failureReason;
 
@@ -330,6 +332,11 @@ public class StreamSession
     {
         assert receivers.containsKey(tableId) : "Missing tableId " + tableId;
         return receivers.get(tableId).getReceiver();
+    }
+
+    public MutationId transferId()
+    {
+        return transferId;
     }
 
     /**
@@ -1261,6 +1268,7 @@ public class StreamSession
         failIfFinished();
         if (summary.files > 0)
             receivers.put(summary.tableId, new StreamReceiveTask(this, summary.tableId, summary.files, summary.totalSize));
+        //
     }
 
     private void startStreamingFiles(@Nullable PrepareDirection prepareDirection)

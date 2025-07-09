@@ -47,6 +47,7 @@ import org.apache.cassandra.io.sstable.ISSTableScanner;
 import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.replication.MutationTrackingService;
 import org.apache.cassandra.streaming.IncomingStream;
 import org.apache.cassandra.streaming.StreamReceiver;
 import org.apache.cassandra.streaming.StreamSession;
@@ -256,7 +257,11 @@ public class CassandraStreamReceiver implements StreamReceiver
 
                 // add sstables (this will build non-SSTable-attached secondary indexes too, see CASSANDRA-10130)
                 logger.debug("[Stream #{}] Received {} sstables from {} ({})", session.planId(), readers.size(), session.peer, readers);
-                cfs.addSSTables(readers);
+
+                if (session.transferId() == null)
+                    cfs.addSSTables(readers);
+                else
+                    MutationTrackingService.instance.transfers().streamFinished(cfs.metadata().id, session.transferId(), readers);
 
                 //invalidate row and counter cache
                 if (cfs.isRowCacheEnabled() || cfs.metadata().isCounter())

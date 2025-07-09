@@ -21,50 +21,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntSupplier;
 
-import com.google.common.base.Preconditions;
-
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.locator.InetAddressAndPort;
-import org.apache.cassandra.replication.CoordinatorLog.CoordinatorLogPrimary;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.tcm.Epoch;
-import org.apache.cassandra.tcm.membership.NodeId;
-import org.jctools.maps.NonBlockingHashMapLong;
 
-public class Shard
+public class Shard extends BaseShard
 {
-    private final String keyspace;
     private final Range<Token> tokenRange;
-    private final int localHostId;
-    private final Participants participants;
-    private final Epoch sinceEpoch;
-    private final NonBlockingHashMapLong<CoordinatorLog> logs;
-    // TODO (expected): add support for log rotation
-    private final CoordinatorLogPrimary currentLocalLog;
 
     Shard(String keyspace, Range<Token> tokenRange, int localHostId, Participants participants, Epoch sinceEpoch, IntSupplier logIdProvider)
     {
-        Preconditions.checkArgument(participants.contains(localHostId));
-
-        this.keyspace = keyspace;
+        super(keyspace, localHostId, participants, sinceEpoch, logIdProvider);
         this.tokenRange = tokenRange;
-        this.localHostId = localHostId;
-        this.participants = participants;
-        this.sinceEpoch = sinceEpoch;
-        this.logs = new NonBlockingHashMapLong<>();
-        this.currentLocalLog = startNewLog(localHostId, logIdProvider.getAsInt(), participants);
-        CoordinatorLogId logId = currentLocalLog.logId;
-        Preconditions.checkArgument(!logId.isNone());
-        logs.put(logId.asLong(), currentLocalLog);
-    }
-
-    MutationId nextId()
-    {
-        return currentLocalLog.nextId();
     }
 
     void receivedWriteResponse(MutationId mutationId, InetAddressAndPort onHost)
@@ -106,18 +79,6 @@ public class Shard
         });
     }
 
-    List<InetAddressAndPort> remoteReplicas()
-    {
-        List<InetAddressAndPort> replicas = new ArrayList<>(participants.size() - 1);
-        for (int i = 0, size = participants.size(); i < size; ++i)
-        {
-            int hostId = participants.get(i);
-            if (hostId != localHostId)
-                replicas.add(ClusterMetadata.current().directory.endpoint(new NodeId(hostId)));
-        }
-        return replicas;
-    }
-
     /**
      * Collects replicated offsets for the logs owned by this coordinator on this shard.
      */
@@ -132,33 +93,5 @@ public class Shard
         }
 
         return new ShardReplicatedOffsets(keyspace, tokenRange, offsets);
-    }
-
-    /**
-     * Creates a new coordinator log for this host. Primarily on Shard init (node startup or topology change).
-     * Also on keyspace creation.
-     */
-    private static CoordinatorLog.CoordinatorLogPrimary startNewLog(int localHostId, int hostLogId, Participants participants)
-    {
-        CoordinatorLogId logId = new CoordinatorLogId(localHostId, hostLogId);
-        return new CoordinatorLog.CoordinatorLogPrimary(localHostId, logId, participants);
-    }
-
-    private CoordinatorLog getOrCreate(MutationId mutationId)
-    {
-        Preconditions.checkArgument(!mutationId.isNone());
-        return getOrCreate(mutationId.logId());
-    }
-
-    private CoordinatorLog getOrCreate(CoordinatorLogId logId)
-    {
-        return getOrCreate(logId.asLong());
-    }
-
-    private CoordinatorLog getOrCreate(long logId)
-    {
-        CoordinatorLog log = logs.get(logId);
-        return log != null
-             ? log : logs.computeIfAbsent(logId, ignore -> CoordinatorLog.create(localHostId, new CoordinatorLogId(logId), participants));
     }
 }

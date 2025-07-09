@@ -44,6 +44,8 @@ import org.apache.cassandra.io.sstable.SSTable;
 import org.apache.cassandra.io.sstable.format.SSTableFormat.Components;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.File;
+import org.apache.cassandra.replication.MutationTrackingService;
+import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.ActiveRepairService;
 import org.apache.cassandra.service.StorageService;
@@ -80,11 +82,7 @@ public class SSTableImporter
         UUID importID = UUID.randomUUID();
         logger.info("[{}] Loading new SSTables for {}/{}: {}", importID, cfs.getKeyspaceName(), cfs.getTableName(), options);
 
-        // This will be supported in the future
         TableMetadata metadata = cfs.metadata();
-        if (metadata.replicationType() != null && metadata.replicationType().isTracked())
-            throw new IllegalStateException("Can't import into tables with mutation tracking enabled");
-
         List<Pair<Directories.SSTableLister, String>> listers = getSSTableListers(options.srcPaths);
 
         Set<Descriptor> currentDescriptors = new HashSet<>();
@@ -233,7 +231,12 @@ public class SSTableImporter
             if (!cfs.indexManager.validateSSTableAttachedIndexes(newSSTables, false, options.validateIndexChecksum))
                 cfs.indexManager.buildSSTableAttachedIndexesBlocking(newSSTables);
 
-            cfs.getTracker().addSSTables(newSSTables);
+            //
+            if (cfs.metadata().replicationType().isTracked())
+                TrackedBulkTransfer.start(cfs.keyspace.getName(), cfs.metadata().id, newSSTables);
+            else
+                cfs.getTracker().addSSTables(newSSTables);
+
             for (SSTableReader reader : newSSTables)
             {
                 if (options.invalidateCaches && cfs.isRowCacheEnabled())
@@ -248,6 +251,17 @@ public class SSTableImporter
 
         logger.info("[{}] Done loading load new SSTables for {}/{}", importID, cfs.getKeyspaceName(), cfs.getTableName());
         return failedDirectories;
+    }
+
+    /**
+     *
+     */
+    private static class TrackedBulkTransfer
+    {
+        private static void start(String keyspace, TableId table, Set<SSTableReader> sstables)
+        {
+            MutationTrackingService.instance.transfers().start(keyspace, table, sstables);
+        }
     }
 
     /**

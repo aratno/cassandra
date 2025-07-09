@@ -133,6 +133,13 @@ public class ReadReconcileSend
                 MutationJournal.instance.readAll(sync.plan, mutations);
                 Preconditions.checkArgument(mutationCount == mutations.size());
 
+                /*
+                We never want to stream a bulk transfer during a read, so if a transferId is missing we should initiate
+                a background stream but not block on it.
+
+                If a transfer
+                */
+
                 ReadReconcileReceive receive = new ReadReconcileReceive(payload.reconcileId, sync.syncId, message.from(), mutations);
                 logger.trace("Sending {} to replica {}", receive, sync.to);
                 MessagingService.instance().send(Message.out(Verb.READ_RECONCILE_RCV, receive), sync.to);

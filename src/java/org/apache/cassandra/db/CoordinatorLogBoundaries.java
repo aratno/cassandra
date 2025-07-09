@@ -44,6 +44,11 @@ public interface CoordinatorLogBoundaries extends Iterable<Long>
     MutationId max(long logId);
     int size();
 
+    default boolean isEmpty()
+    {
+        return size() == 0;
+    }
+
     IVersionedSerializer<CoordinatorLogBoundaries> serializer = new IVersionedSerializer<>()
     {
         @Override

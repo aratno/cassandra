@@ -178,6 +178,11 @@ public abstract class CoordinatorLog
         }
     }
 
+    void startTransfer()
+    {
+
+    }
+
     private boolean othersWitnessed(int offset, int exceptHostId)
     {
         for (int i = 0; i < participants.size(); ++i)

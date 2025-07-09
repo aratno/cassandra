@@ -18,8 +18,14 @@
 
 package org.apache.cassandra.distributed.test.tracking;
 
+import java.nio.file.Files;
+import java.util.Set;
 import java.util.UUID;
 
+import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.distributed.api.IInvokableInstance;
+import org.apache.cassandra.distributed.shared.AssertUtils;
+import org.apache.cassandra.io.sstable.CQLSSTableWriter;
 import org.apache.cassandra.replication.CoordinatorLogId;
 import org.apache.cassandra.replication.MutationSummary;
 import org.apache.cassandra.replication.Offsets;
@@ -122,6 +128,59 @@ public class MutationTrackingTest extends TestBaseImpl
             cluster.get(1).runOnInstance(() -> {
                 Assert.assertEquals(hints, StorageMetrics.totalHints.getCount());
             });
+        }
+    }
+
+    @Test
+    public void testTrackedImport() throws Throwable
+    {
+        try (Cluster cluster = Cluster.build(3)
+                                      .withConfig(cfg -> cfg.with(Feature.NETWORK)
+                                                            .with(Feature.GOSSIP)
+                                                            .set("mutation_tracking_enabled", "true")
+                                                            .set("write_request_timeout", "1000ms"))
+                                      .start())
+        {
+            cluster.schemaChange(withKeyspace("CREATE KEYSPACE %s WITH replication = " +
+                                              "{'class': 'SimpleStrategy', 'replication_factor': 3} " +
+                                              "AND replication_type='tracked';"));
+            String TABLE = "tbl";
+            String KEYSPACE_TABLE = String.format("%s.%s", KEYSPACE, TABLE);
+            String schema = String.format(withKeyspace("CREATE TABLE %s." + TABLE + " (k int primary key, v int);"));
+            cluster.schemaChange(schema);
+
+            // Needs to run outside of instance executor because creates schema
+            String file = Files.createTempDirectory(MutationTrackingTest.class.getSimpleName()).toString();
+
+            try (CQLSSTableWriter writer = CQLSSTableWriter.builder()
+                                                           .forTable(schema)
+                                                           .inDirectory(file)
+                                                           .using("INSERT INTO " + KEYSPACE_TABLE + " (k, v) " + "VALUES (?, ?)")
+                                                           .build())
+            {
+                writer.addRow(1, 1);
+            }
+
+            for (IInvokableInstance instance : cluster)
+            {
+                logger.info("Checking instance {} empty before import", instance.config().num());
+                Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
+                AssertUtils.assertRows(rows); // empty
+            }
+
+            cluster.get(1).runOnInstance(() -> {
+                ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE);
+                Set<String> paths = Set.of(file);
+                logger.info("Importing SSTables {}", paths);
+                cfs.importNewSSTables(paths, true, true, true, true, true, true, true);
+            });
+
+            for (IInvokableInstance instance : cluster)
+            {
+                logger.info("Checking propagation of imported SSTable to {}", instance.config().num());
+                Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
+                AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+            }
         }
     }
 }

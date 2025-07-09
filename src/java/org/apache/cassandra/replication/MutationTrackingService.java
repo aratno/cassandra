@@ -43,6 +43,7 @@ import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
+import org.apache.cassandra.replication.bulk.BulkTransferService;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableId;
@@ -66,6 +67,7 @@ public class MutationTrackingService
     private final TrackedLocalReads localReads = new TrackedLocalReads();
     private final ReplicatedOffsetsBroadcaster broadcaster = new ReplicatedOffsetsBroadcaster();
     private final ConcurrentHashMap<String, KeyspaceShards> shards = new ConcurrentHashMap<>();
+    private final BulkTransferService transfers = new BulkTransferService();
 
     private volatile boolean started = false;
 
@@ -80,8 +82,13 @@ public class MutationTrackingService
         logger.info("Starting replication tracking service");
 
         for (KeyspaceMetadata keyspace : metadata.schema.getKeyspaces())
+        {
             if (keyspace.useMutationTracking())
+            {
                 shards.put(keyspace.name, KeyspaceShards.make(keyspace, metadata, this::nextHostLogId));
+                transfers.init(keyspace, metadata, this::nextHostLogId);
+            }
+        }
 
         broadcaster.start();
 
@@ -179,6 +186,11 @@ public class MutationTrackingService
         return nextHostLogId.incrementAndGet();
     }
     private final AtomicInteger nextHostLogId = new AtomicInteger();
+
+    public BulkTransferService transfers()
+    {
+        return transfers;
+    }
 
     private static class KeyspaceShards
     {
@@ -284,6 +296,18 @@ public class MutationTrackingService
             KeyspaceMetadata ksm = csm.schema.getKeyspaceMetadata(keyspace);
             Range<Token> range = ClusterMetadata.current().placements.get(ksm.params.replication).writes.forRange(token).range();
             return shards.get(range);
+        }
+    }
+
+    private static class BulkShards
+    {
+        private static BulkShards make()
+        {
+
+        }
+
+        public static IntSupplier make(KeyspaceMetadata keyspace, ClusterMetadata metadata, Object nextHostLogId)
+        {
         }
     }
 

@@ -26,7 +26,8 @@ public enum StreamOperation
     BOOTSTRAP("Bootstrap", false, true),
     REBUILD("Rebuild", false, true),
     BULK_LOAD("Bulk Load", true, false),
-    REPAIR("Repair", true, false);
+    REPAIR("Repair", true, false),
+    IMPORT("Tracked Import", false, false);
 
     private final String description;
     private final boolean requiresViewBuild;
