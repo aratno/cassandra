@@ -17,7 +17,13 @@
  */
 package org.apache.cassandra.distributed.test.tracking;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -35,6 +41,7 @@ import org.apache.cassandra.replication.MutationSummary;
 import org.apache.cassandra.replication.MutationTrackingService;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableId;
+import org.apache.cassandra.utils.FBUtilities;
 
 import static java.lang.String.format;
 import static org.apache.cassandra.distributed.shared.NetworkTopology.dcAndRack;
@@ -78,11 +85,18 @@ public class MutationTrackingWriteForwardingTest extends TestBaseImpl
             cluster.schemaChange(format("CREATE TABLE %s.%s (k int, c int, v int, primary key (k, c));", keyspaceName, tableName));
 
             int ROWS = 100;
-            for (int inserted = 0; inserted < ROWS; inserted++)
+            ExecutorService executor = Executors.newFixedThreadPool(ROWS);
+            List<Future<?>> futures = new ArrayList<>(ROWS);
+            for (AtomicInteger i = new AtomicInteger(); i.get() < ROWS; i.incrementAndGet())
             {
                 // Writes should be completed for the client, regardless of whether they are forwarded or not
-                cluster.coordinator(inst(inserted)).execute(format("INSERT INTO %s.%s (k, c, v) VALUES (?, ?, ?)", keyspaceName, tableName), ConsistencyLevel.ALL, inserted, inserted, inserted);
+                Future<?> future = executor.submit(() -> {
+                    int inserted = i.get();
+                    cluster.coordinator(inst(inserted)).execute(format("INSERT INTO %s.%s (k, c, v) VALUES (?, ?, ?)", keyspaceName, tableName), ConsistencyLevel.ALL, inserted, inserted, inserted);
+                });
+                futures.add(future);
             }
+            FBUtilities.waitOnFutures(futures);
 
             Thread.sleep(1000); // allow time for all offsets to be broadcasted
 
