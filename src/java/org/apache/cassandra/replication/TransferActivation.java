@@ -21,10 +21,7 @@ package org.apache.cassandra.replication;
 import java.io.IOException;
 
 import com.google.common.base.Preconditions;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.db.streaming.CassandraStreamReceiver;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -34,12 +31,8 @@ import org.apache.cassandra.utils.TimeUUID;
 
 public class TransferActivation
 {
-    private static final Logger logger = LoggerFactory.getLogger(TransferActivation.class);
-
     private final TimeUUID planId;
     private final MutationId transferId;
-
-    // TODO: Add checksums here?
 
     TransferActivation(CoordinatedTransfer transfer)
     {
@@ -54,14 +47,6 @@ public class TransferActivation
         this.transferId = transferId;
     }
 
-    /**
-     * Safely move a transfer into the live set. This must be crash-safe, and the primary invariant we need to
-     * preserve is a transfer is only added to the live set iff the transfer ID is present in its mutation summaries.
-     * Lookup SSTables, check checksums, add to live set, record transferId in log
-     * <p>
-     * TODO: Validate checksums, since there might be a longer gap between streaming and activation.
-     * TODO: Clear out the row cache and counter cache, like {@link CassandraStreamReceiver#finished}.
-     */
     public void apply()
     {
         MutationTrackingService.instance.activatePendingTransfer(planId, transferId);

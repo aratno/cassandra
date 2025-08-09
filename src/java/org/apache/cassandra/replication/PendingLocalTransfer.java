@@ -62,7 +62,10 @@ public class PendingLocalTransfer
      * Safely move a transfer into the live set. This must be crash-safe, and the primary invariant we need to
      * preserve is a transfer is only added to the live set iff the transfer ID is present in its mutation summaries.
      *
-     * TODO: Validate checksums, since there might be a longer gap between streaming and activation? No.
+     * We don't validate checksums here, mostly because a transfer can be activated during a read, if one replica
+     * missed the TransferActivation. Transfers should not be pending for very long, and should be protected by
+     * internode integrity checks provided by TLS.
+     *
      * TODO: Clear out the row cache and counter cache, like {@link CassandraStreamReceiver#finished}.
      * TODO: Don't add to the live set if coordinator and not an owner for the range
      */
@@ -80,7 +83,7 @@ public class PendingLocalTransfer
             // Modify SSTables metadata to durably set transfer ID before importing
             // TODO: Update to CoordinatorLogOffsets on rebase
             CoordinatorLogBoundaries boundaries = new CoordinatorLogBoundariesBuilder()
-                                                  // .add(transferId)
+                                                  .add(transferId)
                                                   .build();
             try
             {

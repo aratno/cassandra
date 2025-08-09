@@ -182,11 +182,6 @@ public class CassandraStreamReader implements IStreamReader
     {
         boolean isTracked = cfs.metadata().replicationType().isTracked();
 
-        /* REVIEW:
-        Think about how we should handle multiple data directories. We need to confirm checksums of SSTable files before
-        adding them to the live set, since they might have rot since streaming, so we should keep SSTables intact and
-        not split.
-        */
         Directories.DataDirectory localDir = isTracked
                 ? cfs.getDirectories().getPendingDirectory(totalSize)
                 : cfs.getDirectories().getWriteableLocation(totalSize);
