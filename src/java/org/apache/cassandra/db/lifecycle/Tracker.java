@@ -61,7 +61,6 @@ import org.apache.cassandra.notifications.SSTableRepairStatusChanged;
 import org.apache.cassandra.notifications.TableDroppedNotification;
 import org.apache.cassandra.notifications.TablePreScrubNotification;
 import org.apache.cassandra.notifications.TruncationNotification;
-import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.utils.Pair;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.TimeUUID;

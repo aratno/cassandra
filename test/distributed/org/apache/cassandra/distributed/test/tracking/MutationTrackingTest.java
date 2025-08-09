@@ -24,7 +24,6 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.distributed.api.IInvokableInstance;
 import org.apache.cassandra.distributed.shared.AssertUtils;
 import org.apache.cassandra.io.sstable.CQLSSTableWriter;
