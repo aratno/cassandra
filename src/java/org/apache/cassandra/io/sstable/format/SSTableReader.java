@@ -1352,6 +1352,17 @@ public abstract class SSTableReader extends SSTable implements UnfilteredSource,
     }
 
     /**
+     */
+    public void mutateCoordinatorLogBoundariesAndReload(CoordinatorLogBoundaries boundaries) throws IOException
+    {
+        synchronized (tidy.global)
+        {
+            descriptor.getMetadataSerializer().mutateCoordinatorLogBoundaries(descriptor, boundaries);
+            reloadSSTableMetadata();
+        }
+    }
+
+    /**
      * Reloads the sstable metadata from disk.
      * <p>
      * Called after level is changed on sstable, for example if the sstable is dropped to L0

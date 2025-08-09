@@ -332,6 +332,7 @@ public class PartitionRangeReadCommand extends ReadCommand implements PartitionR
     @VisibleForTesting
     public UnfilteredPartitionIterator queryStorage(final ColumnFamilyStore cfs, ReadExecutionController controller)
     {
+        // TODO: Attach transfer IDs, like SinglePartitionReadCommand
         ColumnFamilyStore.ViewFragment view = cfs.select(View.selectLive(dataRange().keyRange()));
         Tracing.trace("Executing seq scan across {} sstables for {}", view.sstables.size(), dataRange().keyRange().getString(metadata().partitionKeyType));
 

@@ -247,6 +247,36 @@ public class StatsMetadata extends MetadataComponent
                                  lastKey);
     }
 
+    public StatsMetadata mutateCoordinatorLogBoundaries(CoordinatorLogBoundaries newCoordinatorLogBoundaries)
+    {
+        return new StatsMetadata(estimatedPartitionSize,
+                                 estimatedCellPerPartitionCount,
+                                 commitLogIntervals,
+                                 minTimestamp,
+                                 maxTimestamp,
+                                 minLocalDeletionTime,
+                                 maxLocalDeletionTime,
+                                 minTTL,
+                                 maxTTL,
+                                 compressionRatio,
+                                 estimatedTombstoneDropTime,
+                                 sstableLevel,
+                                 clusteringTypes,
+                                 coveredClustering,
+                                 hasLegacyCounterShards,
+                                 repairedAt,
+                                 totalColumnsSet,
+                                 totalRows,
+                                 tokenSpaceCoverage,
+                                 originatingHostId,
+                                 pendingRepair,
+                                 isTransient,
+                                 hasPartitionLevelDeletions,
+                                 newCoordinatorLogBoundaries,
+                                 firstKey,
+                                 lastKey);
+    }
+
     @Override
     public boolean equals(Object o)
     {

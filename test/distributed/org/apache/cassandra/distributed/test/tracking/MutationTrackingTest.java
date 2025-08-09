@@ -21,8 +21,10 @@ package org.apache.cassandra.distributed.test.tracking;
 import java.nio.file.Files;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.distributed.api.IInvokableInstance;
 import org.apache.cassandra.distributed.shared.AssertUtils;
 import org.apache.cassandra.io.sstable.CQLSSTableWriter;
@@ -149,6 +151,9 @@ public class MutationTrackingTest extends TestBaseImpl
             String schema = String.format(withKeyspace("CREATE TABLE %s." + TABLE + " (k int primary key, v int);"));
             cluster.schemaChange(schema);
 
+            // Hack: need to bounce for KeyspaceShards to be created for new table, schema changes not yet supported
+            bounce(cluster);
+
             // Needs to run outside of instance executor because creates schema
             String file = Files.createTempDirectory(MutationTrackingTest.class.getSimpleName()).toString();
 
@@ -182,5 +187,20 @@ public class MutationTrackingTest extends TestBaseImpl
                 AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
             }
         }
+    }
+
+    private static void bounce(Cluster cluster)
+    {
+        cluster.forEach(instance -> {
+            try
+            {
+                instance.shutdown().get();
+            }
+            catch (InterruptedException | ExecutionException e)
+            {
+                throw new RuntimeException(e);
+            }
+            instance.startup();
+        });
     }
 }

@@ -22,7 +22,6 @@ import java.io.IOException;
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.locator.InetAddressAndPort;
-import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.streaming.StreamingChannel;
 import org.apache.cassandra.streaming.StreamingDataOutputPlus;
 import org.apache.cassandra.streaming.StreamOperation;
@@ -48,7 +47,6 @@ public class StreamInitMessage extends StreamMessage
 
     public final TimeUUID pendingRepair;
     public final PreviewKind previewKind;
-    public final MutationId transferId;
 
     public StreamInitMessage(InetAddressAndPort from, int sessionIndex, TimeUUID planId, StreamOperation streamOperation,
                              TimeUUID pendingRepair, PreviewKind previewKind)

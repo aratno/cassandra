@@ -33,6 +33,7 @@ import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.db.CoordinatorLogBoundaries;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
 import org.apache.cassandra.io.sstable.Descriptor;
@@ -246,6 +247,15 @@ public class MetadataSerializer implements IMetadataSerializer
                          descriptor.fileFor(Components.STATS), newRepairedAt, newPendingRepair);
 
         mutate(descriptor, stats -> stats.mutateRepairedMetadata(newRepairedAt, newPendingRepair, isTransient));
+    }
+
+    @Override
+    public void mutateCoordinatorLogBoundaries(Descriptor descriptor, CoordinatorLogBoundaries boundaries) throws IOException
+    {
+        if (logger.isTraceEnabled())
+            logger.trace("Mutating {} to {}", descriptor.fileFor(Components.STATS), boundaries);
+
+        mutate(descriptor, stats -> stats.mutateCoordinatorLogBoundaries(boundaries));
     }
 
     private void mutate(Descriptor descriptor, UnaryOperator<StatsMetadata> transform) throws IOException

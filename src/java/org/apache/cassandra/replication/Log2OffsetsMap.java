@@ -24,6 +24,7 @@ import java.util.Iterator;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Iterables;
 
+import org.cliffc.high_scale_lib.LongIterator;
 import org.agrona.collections.Long2ObjectHashMap;
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
@@ -38,6 +39,37 @@ public abstract class Log2OffsetsMap<T extends Offsets> implements Iterable<Shor
     public Iterator<ShortMutationId> iterator()
     {
         return Iterables.concat(offsetMap().values()).iterator();
+    }
+
+    public Iterator<ShortMutationId> ids(long logId)
+    {
+        return offsetMap().get(logId).iterator();
+    }
+
+    public LongIterator logIds()
+    {
+        return new LongIterator()
+        {
+            final Long2ObjectHashMap<T>.KeyIterator iter = offsetMap().keySet().iterator();
+
+            @Override
+            public long nextLong()
+            {
+                return iter.nextLong();
+            }
+
+            @Override
+            public boolean hasNext()
+            {
+                return iter.hasNext();
+            }
+
+            @Override
+            public Long next()
+            {
+                return iter.next();
+            }
+        };
     }
 
     public int idCount()
@@ -100,6 +132,12 @@ public abstract class Log2OffsetsMap<T extends Offsets> implements Iterable<Shor
         {
             for (Offsets offsets : that.offsetMap().values())
                 add(offsets);
+        }
+
+        public void addAll(Iterator<ShortMutationId> ids)
+        {
+            while (ids.hasNext())
+                add(ids.next());
         }
 
         public void remove(Offsets offsets)

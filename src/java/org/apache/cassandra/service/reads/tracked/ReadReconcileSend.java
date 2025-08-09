@@ -19,12 +19,15 @@ package org.apache.cassandra.service.reads.tracked;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+
+import org.cliffc.high_scale_lib.LongIterator;
 
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.TypeSizes;
@@ -38,6 +41,8 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.replication.Log2OffsetsMap;
 import org.apache.cassandra.replication.MutationJournal;
+import org.apache.cassandra.replication.MutationTrackingService;
+import org.apache.cassandra.replication.TransferActivation;
 import org.apache.cassandra.utils.CollectionSerializer;
 
 /**
@@ -128,19 +133,30 @@ public class ReadReconcileSend
             {
                 // TODO (expected): do not deser just to serialize again, if same messaging versions (common case)
                 // TODO (expected): don't materialize mutation ids, look up from offset collections
-                int mutationCount = sync.plan.idCount();
-                List<Mutation> mutations = new ArrayList<>(mutationCount);
-                MutationJournal.instance.readAll(sync.plan, mutations);
-                Preconditions.checkArgument(mutationCount == mutations.size());
+                // TODO (expected): Add size hint for mutationIds since we expect transfers to be rare
+                Log2OffsetsMap.Mutable mutationIds = new Log2OffsetsMap.Mutable();
+                List<TransferActivation> transfers = new ArrayList<>();
+                LongIterator logIds = sync.plan.logIds();
+                while (logIds.hasNext())
+                {
+                    long logId = logIds.nextLong();
 
-                /*
-                We never want to stream a bulk transfer during a read, so if a transferId is missing we should initiate
-                a background stream but not block on it.
+                    // The current node knows the PlanID for the given TransferID, since it's already been activated
+                    Collection<TransferActivation> activated = MutationTrackingService.instance.getActivatedTransfers(logId);
 
-                If a transfer
-                */
+                    // A given logId is either regular mutations, or for transfers,
+                    if (activated.isEmpty())
+                        mutationIds.addAll(sync.plan.ids(logId));
+                    else
+                        transfers.addAll(activated);
+                }
 
-                ReadReconcileReceive receive = new ReadReconcileReceive(payload.reconcileId, sync.syncId, message.from(), mutations);
+                List<Mutation> mutations = new ArrayList<>(mutationIds.idCount());
+                MutationJournal.instance.readAll(mutationIds, mutations);
+
+                Preconditions.checkArgument(sync.plan.idCount() == (mutations.size() + transfers.size()));
+
+                ReadReconcileReceive receive = new ReadReconcileReceive(payload.reconcileId, sync.syncId, message.from(), mutations, transfers);
                 logger.trace("Sending {} to replica {}", receive, sync.to);
                 MessagingService.instance().send(Message.out(Verb.READ_RECONCILE_RCV, receive), sync.to);
             }

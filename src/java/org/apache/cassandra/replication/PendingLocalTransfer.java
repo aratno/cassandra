@@ -1,0 +1,144 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.cassandra.replication;
+
+import java.io.IOException;
+import java.util.Collection;
+import java.util.Objects;
+
+import com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.CoordinatorLogBoundaries;
+import org.apache.cassandra.db.CoordinatorLogBoundariesBuilder;
+import org.apache.cassandra.db.streaming.CassandraStreamReceiver;
+import org.apache.cassandra.io.IVersionedSerializer;
+import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.io.util.DataInputPlus;
+import org.apache.cassandra.io.util.DataOutputPlus;
+import org.apache.cassandra.schema.TableId;
+import org.apache.cassandra.utils.TimeUUID;
+
+import static org.apache.cassandra.utils.Clock.Global.currentTimeMillis;
+
+/**
+ * A transfer on a replica, once present on disk.
+ */
+public class PendingLocalTransfer
+{
+    private static final Logger logger = LoggerFactory.getLogger(PendingLocalTransfer.class);
+
+    final TimeUUID planId;
+    final TableId tableId;
+    final Collection<SSTableReader> sstables;
+    final long createdAt = currentTimeMillis();
+
+    public PendingLocalTransfer(TableId tableId, TimeUUID planId, Collection<SSTableReader> sstables)
+    {
+        this.tableId = tableId;
+        this.planId = planId;
+        this.sstables = sstables;
+    }
+
+    /**
+     * Safely move a transfer into the live set. This must be crash-safe, and the primary invariant we need to
+     * preserve is a transfer is only added to the live set iff the transfer ID is present in its mutation summaries.
+     *
+     * TODO: Validate checksums, since there might be a longer gap between streaming and activation? No.
+     * TODO: Clear out the row cache and counter cache, like {@link CassandraStreamReceiver#finished}.
+     * TODO: Don't add to the live set if coordinator and not an owner for the range
+     */
+    public void activate(ShortMutationId transferId)
+    {
+        logger.info("Activating transfer {}, {} ms since pending", this, currentTimeMillis() - createdAt);
+        ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(tableId);
+        Preconditions.checkNotNull(cfs);
+
+        // Ensure no lingering mutation IDs, only transfer IDs
+        for (SSTableReader sstable : sstables)
+        {
+            Preconditions.checkState(sstable.getCoordinatorLogBoundaries().isEmpty());
+
+            // Modify SSTables metadata to durably set transfer ID before importing
+            // TODO: Update to CoordinatorLogOffsets on rebase
+            CoordinatorLogBoundaries boundaries = new CoordinatorLogBoundariesBuilder()
+                                                  // .add(transferId)
+                                                  .build();
+            try
+            {
+                sstable.mutateCoordinatorLogBoundariesAndReload(boundaries);
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
+        cfs.getTracker().addSSTablesTracked(sstables);
+    }
+
+    public static final Serializer serializer = new Serializer();
+
+    public static class Serializer implements IVersionedSerializer<PendingLocalTransfer>
+    {
+        @Override
+        public void serialize(PendingLocalTransfer pending, DataOutputPlus out, int version) throws IOException
+        {
+
+        }
+
+        @Override
+        public PendingLocalTransfer deserialize(DataInputPlus in, int version) throws IOException
+        {
+            return null;
+        }
+
+        @Override
+        public long serializedSize(PendingLocalTransfer pending, int version)
+        {
+            return 0;
+        }
+    }
+
+    @Override
+    public String toString()
+    {
+        return "PendingLocalTransfer{" +
+               "planId=" + planId +
+               ", tableId=" + tableId +
+               ", sstables=" + sstables +
+               '}';
+    }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (o == null || getClass() != o.getClass()) return false;
+        PendingLocalTransfer transfer = (PendingLocalTransfer) o;
+        return Objects.equals(planId, transfer.planId) && Objects.equals(tableId, transfer.tableId) && Objects.equals(sstables, transfer.sstables);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return Objects.hash(planId, tableId, sstables);
+    }
+}

@@ -45,9 +45,11 @@ import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.UnknownColumnException;
+import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.RangeAwareSSTableWriter;
 import org.apache.cassandra.io.sstable.SSTableMultiWriter;
 import org.apache.cassandra.io.sstable.SSTableSimpleIterator;
+import org.apache.cassandra.io.sstable.SimpleSSTableMultiWriter;
 import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.Version;
@@ -56,6 +58,7 @@ import org.apache.cassandra.io.util.TrackedDataInputPlus;
 import org.apache.cassandra.metrics.StorageMetrics;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.schema.TableMetadata;
+import org.apache.cassandra.service.ActiveRepairService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.streaming.ProgressInfo;
 import org.apache.cassandra.streaming.StreamReceivedOutOfTokenRangeException;
@@ -177,16 +180,33 @@ public class CassandraStreamReader implements IStreamReader
     }
     protected SSTableMultiWriter createWriter(ColumnFamilyStore cfs, long totalSize, long repairedAt, TimeUUID pendingRepair, CoordinatorLogBoundaries coordinatorLogBoundaries, SSTableFormat<?, ?> format) throws IOException
     {
-        Directories.DataDirectory localDir = cfs.getDirectories().getWriteableLocation(totalSize);
+        boolean isTracked = cfs.metadata().replicationType().isTracked();
+
+        /* REVIEW:
+        Think about how we should handle multiple data directories. We need to confirm checksums of SSTable files before
+        adding them to the live set, since they might have rot since streaming, so we should keep SSTables intact and
+        not split.
+        */
+        Directories.DataDirectory localDir = isTracked
+                ? cfs.getDirectories().getPendingDirectory(totalSize)
+                : cfs.getDirectories().getWriteableLocation(totalSize);
         if (localDir == null)
             throw new IOException(String.format("Insufficient disk space to store %s", FBUtilities.prettyPrintMemory(totalSize)));
 
         StreamReceiver streamReceiver = session.getAggregator(tableId);
         Preconditions.checkState(streamReceiver instanceof CassandraStreamReceiver);
+        // REVIEW: Will LifecycleNewTracker move these to the live set on bounce? We want to avoid that.
         LifecycleNewTracker lifecycleNewTracker = CassandraStreamReceiver.fromReceiver(session.getAggregator(tableId)).createLifecycleNewTracker();
 
-        RangeAwareSSTableWriter writer = new RangeAwareSSTableWriter(cfs, estimatedKeys, repairedAt, pendingRepair, false, coordinatorLogBoundaries, format, sstableLevel, totalSize, lifecycleNewTracker, getHeader(cfs.metadata()));
-        return writer;
+        if (isTracked)
+        {
+            Descriptor desc = cfs.newSSTableDescriptor(localDir.location, format);
+            return SimpleSSTableMultiWriter.create(desc, estimatedKeys, ActiveRepairService.UNREPAIRED_SSTABLE, ActiveRepairService.NO_PENDING_REPAIR, false,
+                                                   coordinatorLogBoundaries, cfs.metadata, null, sstableLevel, getHeader(cfs.metadata()),
+                                                   cfs.indexManager.listIndexGroups(), lifecycleNewTracker, cfs);
+        }
+        else
+            return new RangeAwareSSTableWriter(cfs, estimatedKeys, repairedAt, pendingRepair, false, coordinatorLogBoundaries, format, sstableLevel, totalSize, lifecycleNewTracker, getHeader(cfs.metadata()));
     }
 
     protected long totalSize()

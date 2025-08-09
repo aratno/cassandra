@@ -36,6 +36,7 @@ import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.replication.MutationTrackingService;
+import org.apache.cassandra.replication.TransferActivation;
 import org.apache.cassandra.utils.CollectionSerializer;
 
 import static org.apache.cassandra.locator.InetAddressAndPort.Serializer.inetAddressAndPortSerializer;
@@ -48,13 +49,15 @@ public class ReadReconcileReceive
     public final int syncId;
     public final InetAddressAndPort coordinator;
     public final List<Mutation> mutations;
+    public final List<TransferActivation> transfers;
 
-    public ReadReconcileReceive(TrackedRead.Id readId, int syncId, InetAddressAndPort coordinator, List<Mutation> mutations)
+    public ReadReconcileReceive(TrackedRead.Id readId, int syncId, InetAddressAndPort coordinator, List<Mutation> mutations, List<TransferActivation> transfers)
     {
         this.readId = readId;
         this.syncId = syncId;
         this.coordinator = coordinator;
         this.mutations = mutations;
+        this.transfers = transfers;
     }
 
     private static String mutationString(List<Mutation> mutations)
@@ -82,6 +85,7 @@ public class ReadReconcileReceive
                ", syncId=" + syncId +
                ", coordinator=" + coordinator +
                ", mutations=" + mutationString(mutations) +
+               ", transfers=" + transfers +
                '}';
     }
 
@@ -95,6 +99,12 @@ public class ReadReconcileReceive
             logger.trace("Received read reconciliation from {}: {}", message.from(), receive);
             receive.mutations.forEach(Mutation::apply);
 
+            // When read participant misses an activate, thinks transfer is still pending
+            // TODO: Handle missing transfers? Don't want to block a read on streaming.
+            // Should be able to prevent this, even when ownership changes race with activation
+            receive.transfers.forEach(TransferActivation::apply);
+
+            // TODO: Figure out how to augment local reads when transfers happen
             if (!MutationTrackingService.instance.localReads().receiveMutations(receive.readId, receive.syncId, receive.mutations))
             {
                 // if this isn't a locally coordinated read, notify the coordinator
@@ -113,7 +123,7 @@ public class ReadReconcileReceive
             out.writeInt(rcv.syncId);
             inetAddressAndPortSerializer.serialize(rcv.coordinator, out, version);
             CollectionSerializer.serializeCollection(Mutation.serializer, rcv.mutations, out, version);
-
+            CollectionSerializer.serializeCollection(TransferActivation.serializer, rcv.transfers, out, version);
         }
 
         @Override
@@ -123,7 +133,8 @@ public class ReadReconcileReceive
             int syncId = in.readInt();
             InetAddressAndPort coordinator = inetAddressAndPortSerializer.deserialize(in, version);
             List<Mutation> mutations = CollectionSerializer.deserializeCollection(Mutation.serializer, ArrayList::new, in, version);
-            return new ReadReconcileReceive(readId, syncId, coordinator, mutations);
+            List<TransferActivation> transfers = CollectionSerializer.deserializeCollection(TransferActivation.serializer, ArrayList::new, in, version);
+            return new ReadReconcileReceive(readId, syncId, coordinator, mutations, transfers);
         }
 
         @Override
@@ -132,7 +143,8 @@ public class ReadReconcileReceive
             return TrackedRead.Id.serializer.serializedSize(t.readId, version)
                    + TypeSizes.sizeof(t.syncId)
                    + inetAddressAndPortSerializer.serializedSize(t.coordinator, version)
-                   + CollectionSerializer.serializedSizeCollection(Mutation.serializer, t.mutations, version);
+                   + CollectionSerializer.serializedSizeCollection(Mutation.serializer, t.mutations, version)
+                   + CollectionSerializer.serializedSizeCollection(TransferActivation.serializer, t.transfers, version);
         }
     };
 }

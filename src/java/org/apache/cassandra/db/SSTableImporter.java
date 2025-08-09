@@ -231,9 +231,8 @@ public class SSTableImporter
             if (!cfs.indexManager.validateSSTableAttachedIndexes(newSSTables, false, options.validateIndexChecksum))
                 cfs.indexManager.buildSSTableAttachedIndexesBlocking(newSSTables);
 
-            //
             if (cfs.metadata().replicationType().isTracked())
-                TrackedBulkTransfer.start(cfs.keyspace.getName(), cfs.metadata().id, newSSTables);
+                TrackedBulkTransfer.start(cfs.keyspace.getName(), newSSTables);
             else
                 cfs.getTracker().addSSTables(newSSTables);
 
@@ -258,9 +257,10 @@ public class SSTableImporter
      */
     private static class TrackedBulkTransfer
     {
-        private static void start(String keyspace, TableId table, Set<SSTableReader> sstables)
+        private static void start(String keyspace, Set<SSTableReader> sstables)
         {
-            MutationTrackingService.instance.transfers().start(keyspace, table, sstables);
+            // TODO: This isn't cheap - think about what thread it should happen on
+            MutationTrackingService.instance.startTransfer(keyspace, sstables);
         }
     }
 

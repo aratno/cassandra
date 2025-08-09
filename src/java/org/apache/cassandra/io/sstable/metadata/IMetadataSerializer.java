@@ -22,6 +22,7 @@ import java.util.EnumSet;
 import java.util.Map;
 import java.util.function.UnaryOperator;
 
+import org.apache.cassandra.db.CoordinatorLogBoundaries;
 import org.apache.cassandra.io.sstable.Descriptor;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.Version;
@@ -95,6 +96,10 @@ public interface IMetadataSerializer
      * {@link SSTableReader#mutateLevelAndReload} instead on live sstable.
      */
     public void mutateRepairMetadata(Descriptor descriptor, long newRepairedAt, TimeUUID newPendingRepair, boolean isTransient) throws IOException;
+
+    /**
+     */
+    public void mutateCoordinatorLogBoundaries(Descriptor descriptor, CoordinatorLogBoundaries boundaries) throws IOException;
 
     /**
      * Replace the sstable metadata file ({@code -Statistics.db}) with the given components.

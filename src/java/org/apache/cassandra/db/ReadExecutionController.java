@@ -18,6 +18,9 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -25,6 +28,8 @@ import com.google.common.base.Preconditions;
 
 import org.apache.cassandra.db.filter.DataLimits;
 import org.apache.cassandra.index.Index;
+import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.utils.MonotonicClock;
 import org.apache.cassandra.utils.concurrent.OpOrder;
@@ -49,6 +54,9 @@ public class ReadExecutionController implements AutoCloseable
 
     private final RepairedDataInfo repairedDataInfo;
     private long oldestUnrepairedTombstone = Long.MAX_VALUE;
+
+    // TODO(rebase): should be the single-threaded mutable coordinator log offsets
+    private Set<MutationId> transferIds = null;
 
     ReadExecutionController(ReadCommand command,
                             OpOrder.Group baseOp,
@@ -242,5 +250,21 @@ public class ReadExecutionController implements AutoCloseable
         ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(baseMetadata.id);
         if (cfs != null)
             cfs.metric.topLocalReadQueryTime.addSample(cql, timeMicros);
+    }
+
+    public void addTransferIds(ColumnFamilyStore.ViewFragment view)
+    {
+        // TODO: Not all sstables in the view are transfers, shouldn't add all CoordinatorLogOffsets
+        transferIds = new HashSet<>();
+        for (SSTableReader sstable : view.sstables)
+        {
+            // TODO(rebase): once we switch to CoordinatorLogOffsets, collect all transfer IDs here
+            // transferIds.addAll(sstable.getCoordinatorLogBoundaries());
+        }
+    }
+
+    public Iterator<MutationId> getTransferIds()
+    {
+        return transferIds.iterator();
     }
 }

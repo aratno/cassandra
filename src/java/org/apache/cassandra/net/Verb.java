@@ -74,6 +74,7 @@ import org.apache.cassandra.repair.messages.ValidationResponse;
 import org.apache.cassandra.repair.messages.ValidationRequest;
 import org.apache.cassandra.replication.ForwardedWrite;
 import org.apache.cassandra.replication.ShardReplicatedOffsets;
+import org.apache.cassandra.replication.TransferActivation;
 import org.apache.cassandra.schema.SchemaMutationsSerializer;
 import org.apache.cassandra.schema.SchemaPullVerbHandler;
 import org.apache.cassandra.schema.SchemaPushVerbHandler;
@@ -258,6 +259,8 @@ public enum Verb
     TRACKED_RANGE_READ_REQ     (909, P3, rangeTimeout, READ,             () -> TrackedRead.DataRequest.serializer,    () -> TrackedRead.verbHandler,           TRACKED_RANGE_READ_RSP    ),
     TRACKED_SUMMARY_RSP        (910, P2, readTimeout,  REQUEST_RESPONSE, () -> TrackedSummaryResponse.serializer,     () -> TrackedSummaryResponse.verbHandler                           ),
     TRACKED_SUMMARY_REQ        (911, P3, readTimeout,  READ,             () -> TrackedRead.SummaryRequest.serializer, () -> TrackedRead.verbHandler,           TRACKED_SUMMARY_RSP       ),
+
+    TRACKED_TRANSFER_ACTIVATE  (912, P1, rpcTimeout, MISC, () -> TransferActivation.serializer, () -> TransferActivation.verbHandler),
 
     INITIATE_DATA_MOVEMENTS_RSP (814, P1, rpcTimeout, MISC, () -> NoPayload.serializer,             () -> ResponseVerbHandler.instance                                  ),
     INITIATE_DATA_MOVEMENTS_REQ (815, P1, rpcTimeout, MISC, () -> DataMovement.serializer,          () -> DataMovementVerbHandler.instance, INITIATE_DATA_MOVEMENTS_RSP ),

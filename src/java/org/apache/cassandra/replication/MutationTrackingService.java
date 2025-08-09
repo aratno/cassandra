@@ -17,9 +17,13 @@
  */
 package org.apache.cassandra.replication;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,21 +39,24 @@ import org.apache.cassandra.concurrent.Shutdownable;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
+import org.apache.cassandra.db.lifecycle.SSTableIntervalTree;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.gms.FailureDetector;
+import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
-import org.apache.cassandra.replication.bulk.BulkTransferService;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.service.reads.tracked.TrackedLocalReads;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.utils.FBUtilities;
+import org.apache.cassandra.utils.Interval;
+import org.apache.cassandra.utils.TimeUUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,7 +74,7 @@ public class MutationTrackingService
     private final TrackedLocalReads localReads = new TrackedLocalReads();
     private final ReplicatedOffsetsBroadcaster broadcaster = new ReplicatedOffsetsBroadcaster();
     private final ConcurrentHashMap<String, KeyspaceShards> shards = new ConcurrentHashMap<>();
-    private final BulkTransferService transfers = new BulkTransferService();
+    private final PendingLocalTransfers transfers = new PendingLocalTransfers();
 
     private volatile boolean started = false;
 
@@ -82,13 +89,12 @@ public class MutationTrackingService
         logger.info("Starting replication tracking service");
 
         for (KeyspaceMetadata keyspace : metadata.schema.getKeyspaces())
-        {
             if (keyspace.useMutationTracking())
             {
-                shards.put(keyspace.name, KeyspaceShards.make(keyspace, metadata, this::nextHostLogId));
-                transfers.init(keyspace, metadata, this::nextHostLogId);
+                KeyspaceShards keyspaceShards = KeyspaceShards.make(keyspace, metadata, this::nextHostLogId);
+                logger.debug("Creating shard for {}: {}", keyspace, keyspaceShards);
+                shards.put(keyspace.name, keyspaceShards);
             }
-        }
 
         broadcaster.start();
 
@@ -142,6 +148,65 @@ public class MutationTrackingService
         getOrCreate(mutation.getKeyspaceName()).finishWriting(mutation);
     }
 
+    public void startTransfer(String keyspace, Set<SSTableReader> sstables)
+    {
+        logger.info("Starting tracked bulk transfer for keyspace {} sstables {}", keyspace, sstables);
+
+        KeyspaceShards keyspaceShards = shards.get(keyspace);
+        Preconditions.checkNotNull(keyspaceShards);
+
+        // TODO(expected): Clean up incoming SSTables to remove any existing CoordinatorLogBoundaries
+        CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables);
+        logger.info("Split input SSTables into transfers {}", transfers);
+
+        for (CoordinatedTransfer transfer : transfers)
+        {
+            // Nothing to stream, so nothing to activate
+            if (!transfer.stream())
+                continue;
+
+            /* TODO
+            If topology has changed after streaming, need to ensure new topology doesn't break consistency of completed
+            streams.
+            */
+            logger.debug("Streaming completed for plan {}, activating transfer", transfer.planId);
+            keyspaceShards.activateTransfer(transfer);
+
+            logger.debug("Done activating transfer {}", transfer.planId);
+        }
+    }
+
+    PendingLocalTransfer getPendingTransfer(TimeUUID planId)
+    {
+        return instance.transfers.getPending(planId);
+    }
+
+    public void savePendingTransfer(PendingLocalTransfer transfer)
+    {
+        instance.transfers.markPending(transfer);
+        logger.debug("Saved pending transfer for tracked table {}, awaiting activation", transfer);
+    }
+
+    void activatePendingTransfer(TimeUUID planId, MutationId transferId)
+    {
+        PendingLocalTransfer pending = getPendingTransfer(planId);
+        // TEMPORARY: Need to fix bug causing empty streams
+        // See comment in PendingLocalTransfers.markActivating
+        if (pending == null)
+        {
+            logger.warn("Can't activate transfer {} {}", planId, transferId);
+            return;
+        }
+        Preconditions.checkNotNull(pending);
+        pending.activate(transferId);
+        instance.transfers.markActivated(pending.planId, transferId);
+    }
+
+    public Collection<TransferActivation> getActivatedTransfers(long logId)
+    {
+        return instance.transfers.getActivated(logId);
+    }
+
     public MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
     {
         return getOrCreate(tableId).createSummaryForKey(key, tableId, includePending);
@@ -187,14 +252,10 @@ public class MutationTrackingService
     }
     private final AtomicInteger nextHostLogId = new AtomicInteger();
 
-    public BulkTransferService transfers()
-    {
-        return transfers;
-    }
-
     private static class KeyspaceShards
     {
-        private final String keyspace;
+        // TODO: private
+        final String keyspace;
         private final Map<Range<Token>, Shard> shards;
 
         private transient final Map<Range<PartitionPosition>, Shard> ppShards;
@@ -249,10 +310,33 @@ public class MutationTrackingService
             lookUp(mutation).finishWriting(mutation);
         }
 
+        public void activateTransfer(CoordinatedTransfer transfer)
+        {
+            Preconditions.checkNotNull(transfer.planId);
+            Preconditions.checkState(transfer.transferId.isNone());
+
+            MutationId transferId = lookUp(transfer.range).currentTransferLog.nextId();
+            instance.transfers.markActivating(transfer, transferId);
+
+            /* TODO
+            Make this two-phase, where the first phase ensures data is present on disk, and the second phase does the actual
+            import. This ensures that if something goes wrong (like a topology change during import), we don't have
+            divergence.
+            */
+            TransferActivation activate = new TransferActivation(transfer);
+            Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE, activate);
+            for (InetAddressAndPort participant : transfer.participants)
+            {
+                logger.debug("Sending {} to peer {}", activate, participant);
+                MessagingService.instance().send(msg, participant);
+            }
+        }
+
         MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
         {
             MutationSummary.Builder builder = new MutationSummary.Builder(tableId);
             lookUp(key.getToken()).addSummaryForKey(key.getToken(), includePending, builder);
+            // also iterate over bulkshards?
             return builder.build();
         }
 
@@ -260,6 +344,7 @@ public class MutationTrackingService
         {
             MutationSummary.Builder builder = new MutationSummary.Builder(tableId);
             forEachIntersectingShard(range, shard -> shard.addSummaryForRange(range, includePending, builder));
+            // also iterate over bulkshards?
             return builder.build();
         }
 
@@ -297,17 +382,52 @@ public class MutationTrackingService
             Range<Token> range = ClusterMetadata.current().placements.get(ksm.params.replication).writes.forRange(token).range();
             return shards.get(range);
         }
+
+        Shard lookUp(Range<Token> range)
+        {
+            ClusterMetadata csm = ClusterMetadata.current();
+            KeyspaceMetadata ksm = csm.schema.getKeyspaceMetadata(keyspace);
+            Range<Token> replicationRange = ClusterMetadata.current().placements.get(ksm.params.replication).writes.forRange(range).range();
+            return shards.get(replicationRange);
+        }
     }
 
-    private static class BulkShards
+    private static class CoordinatedTransfers implements Iterable<CoordinatedTransfer>
     {
-        private static BulkShards make()
-        {
+        private final Collection<CoordinatedTransfer> transfers;
 
+        private CoordinatedTransfers(Collection<CoordinatedTransfer> transfers)
+        {
+            this.transfers = transfers;
         }
 
-        public static IntSupplier make(KeyspaceMetadata keyspace, ClusterMetadata metadata, Object nextHostLogId)
+        private static CoordinatedTransfers create(KeyspaceShards shards, Collection<SSTableReader> sstables)
         {
+            // Expensive - add a metric
+            // TODO(expected): Fail if incoming transfer is outside owned shard ranges
+            SSTableIntervalTree intervals = SSTableIntervalTree.buildSSTableIntervalTree(sstables);
+            List<CoordinatedTransfer> transfers = new ArrayList<>();
+
+            shards.forEachShard(shard -> {
+                Range<Token> range = shard.tokenRange;
+                Collection<SSTableReader> sstablesForRange = intervals.search(Interval.create(range.left.minKeyBound(), range.right.maxKeyBound()));
+
+                CoordinatedTransfer transfer = new CoordinatedTransfer(range, shard.participants, sstablesForRange);
+                transfers.add(transfer);
+
+                /* REVIEW NOTES
+                Right now for simplicity, streaming from coordinator to itself instead of copying files. This has some
+                perks: (1) it allows us to import out-of-range SSTables using the same paths, and (2) it uses the
+                existing lifecycle management to handle crash-safety, so don't need to deal with atomic multi-file copy.
+                */
+            });
+            return new CoordinatedTransfers(transfers);
+        }
+
+        @Override
+        public Iterator<CoordinatedTransfer> iterator()
+        {
+            return transfers.iterator();
         }
     }
 

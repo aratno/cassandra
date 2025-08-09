@@ -21,23 +21,109 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntSupplier;
 
+import com.google.common.base.Preconditions;
+
+import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
+import org.apache.cassandra.db.ReadExecutionController;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.tcm.Epoch;
+import org.apache.cassandra.tcm.membership.NodeId;
+import org.jctools.maps.NonBlockingHashMapLong;
 
-public class Shard extends BaseShard
+public class Shard
 {
-    private final Range<Token> tokenRange;
+    // TODO: Revert to private
+    final Range<Token> tokenRange;
+    protected final String keyspace;
+    protected final int localHostId;
+    protected final Participants participants;
+    protected final Epoch sinceEpoch;
+    protected final NonBlockingHashMapLong<CoordinatorLog> logs;
+    // TODO (expected): add support for log rotation
+    protected final CoordinatorLog.CoordinatorLogPrimary currentLocalLog;
+
+    /**
+     * This log exists to assign transfer IDs within the current shard.
+     *
+     * Transfer IDs shouldn't be included in read summaries via collect, because concurrent reads may have different
+     * ViewFragments, with different transfers present.
+     * Instead, they'll be included via {@link ReadExecutionController#addTransferIds(ColumnFamilyStore.ViewFragment)}.
+     *
+     * Even though this log isn't used for reads, it is still necessary for global reconciliation. During
+     * reconciliation,
+     */
+    protected final CoordinatorLog.CoordinatorLogPrimary currentTransferLog;
 
     Shard(String keyspace, Range<Token> tokenRange, int localHostId, Participants participants, Epoch sinceEpoch, IntSupplier logIdProvider)
     {
-        super(keyspace, localHostId, participants, sinceEpoch, logIdProvider);
+        Preconditions.checkArgument(participants.contains(localHostId));
+
+        this.keyspace = keyspace;
+        this.localHostId = localHostId;
+        this.participants = participants;
+        this.sinceEpoch = sinceEpoch;
+        this.logs = new NonBlockingHashMapLong<>();
+        this.currentLocalLog = startNewLog(localHostId, logIdProvider.getAsInt(), participants);
+        CoordinatorLogId localLogId = currentLocalLog.logId;
+        Preconditions.checkArgument(!localLogId.isNone());
+        logs.put(localLogId.asLong(), currentLocalLog);
+
+        this.currentTransferLog = startNewLog(localHostId, logIdProvider.getAsInt(), participants);
+        CoordinatorLogId transferLogId = currentTransferLog.logId;
+        Preconditions.checkArgument(!transferLogId.isNone());
+        logs.put(transferLogId.asLong(), currentLocalLog);
         this.tokenRange = tokenRange;
+    }
+
+    MutationId nextId()
+    {
+        return currentLocalLog.nextId();
+    }
+
+    List<InetAddressAndPort> remoteReplicas()
+    {
+        List<InetAddressAndPort> replicas = new ArrayList<>(participants.size() - 1);
+        for (int i = 0, size = participants.size(); i < size; ++i)
+        {
+            int hostId = participants.get(i);
+            if (hostId != localHostId)
+                replicas.add(ClusterMetadata.current().directory.endpoint(new NodeId(hostId)));
+        }
+        return replicas;
+    }
+
+    /**
+     * Creates a new coordinator log for this host. Primarily on Shard init (node startup or topology change).
+     * Also on keyspace creation.
+     */
+    protected static CoordinatorLog.CoordinatorLogPrimary startNewLog(int localHostId, int hostLogId, Participants participants)
+    {
+        CoordinatorLogId logId = new CoordinatorLogId(localHostId, hostLogId);
+        return new CoordinatorLog.CoordinatorLogPrimary(localHostId, logId, participants);
+    }
+
+    protected CoordinatorLog getOrCreate(MutationId mutationId)
+    {
+        Preconditions.checkArgument(!mutationId.isNone());
+        return getOrCreate(mutationId.logId());
+    }
+
+    protected CoordinatorLog getOrCreate(CoordinatorLogId logId)
+    {
+        return getOrCreate(logId.asLong());
+    }
+
+    protected CoordinatorLog getOrCreate(long logId)
+    {
+        CoordinatorLog log = logs.get(logId);
+        return log != null
+               ? log : logs.computeIfAbsent(logId, ignore -> CoordinatorLog.create(localHostId, new CoordinatorLogId(logId), participants));
     }
 
     void receivedWriteResponse(MutationId mutationId, InetAddressAndPort onHost)

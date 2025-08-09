@@ -115,6 +115,7 @@ public class Directories
 
     public static final String BACKUPS_SUBDIR = "backups";
     public static final String SNAPSHOT_SUBDIR = "snapshots";
+    public static final String PENDING_SUBDIR = "pending";
     public static final String TMP_SUBDIR = "tmp";
     public static final String SECONDARY_INDEX_NAME_SEPARATOR = ".";
 
@@ -725,6 +726,14 @@ public class Directories
     public static File getSnapshotSchemaFile(File snapshotDir)
     {
         return new File(snapshotDir, "schema.cql");
+    }
+
+    public DataDirectory getPendingDirectory(long writeSize)
+    {
+        DataDirectory directory = getWriteableLocation(writeSize);
+        File location = getOrCreate(directory.location, PENDING_SUBDIR);
+        logger.debug("Using pending directory {} for file of size {}", location, writeSize);
+        return new DataDirectory(location);
     }
 
     public static File getBackupsDirectory(Descriptor desc)

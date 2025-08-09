@@ -36,6 +36,7 @@ import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.replication.Log2OffsetsMap;
+import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.replication.MutationJournal;
 import org.apache.cassandra.replication.MutationSummary;
 import org.apache.cassandra.replication.ReconciliationPlan;
@@ -521,7 +522,7 @@ public class TrackedLocalReadCoordinator
         }
 
         PartialTrackedRead read;
-        MutationSummary secondarySummary;
+        MutationSummary summary;
 
         MutationSummary initialSummary = command.createMutationSummary(false);
         ReadExecutionController controller = command.executionController(false);
@@ -530,8 +531,11 @@ public class TrackedLocalReadCoordinator
             read = command.beginTrackedRead(controller);
             // Create another summary once initial data has been read fully. We do this to catch
             // any mutations that may have arrived during initial read execution.
-            secondarySummary = command.createMutationSummary(true);
+            MutationSummary secondarySummary = command.createMutationSummary(true);
             processDelta(read, initialSummary, secondarySummary);
+
+            // Include in summary any transfer IDs that were present for the read
+            summary = merge(controller.getTransferIds(), secondarySummary);
         }
         catch (Exception e)
         {
@@ -542,8 +546,32 @@ public class TrackedLocalReadCoordinator
 
         synchronized (this)
         {
-            state = state.receiveInProgressRead(read, secondarySummary);
+            state = state.receiveInProgressRead(read, summary);
         }
+    }
+
+    private static MutationSummary merge(Iterator<MutationId> transferIds, MutationSummary summary)
+    {
+        if (transferIds == null || !transferIds.hasNext())
+            return summary;
+
+        MutationSummary.Builder builder = new MutationSummary.Builder(summary.tableId());
+
+        // TODO: Make faster without a copy
+        for (int i = 0; i < summary.size(); i++)
+        {
+            MutationSummary.CoordinatorSummary coordinatorSummary = summary.get(i);
+            MutationSummary.CoordinatorSummary.Builder coordinatorSummaryBuilder = builder.builderForLog(coordinatorSummary.logId());
+            coordinatorSummaryBuilder.unreconciled.addAll(coordinatorSummary.unreconciled);
+            coordinatorSummaryBuilder.reconciled.addAll(coordinatorSummary.reconciled);
+        }
+
+        while (transferIds.hasNext())
+        {
+            MutationId id = transferIds.next();
+            builder.builderForLog(id).unreconciled.add(id.offset());
+        }
+        return builder.build();
     }
 
     private static void complete(AsyncPromise<TrackedDataResponse> promise, PartialTrackedRead read, ColumnFilter selection, ConsistencyLevel consistencyLevel, long expiresAtNanos)
