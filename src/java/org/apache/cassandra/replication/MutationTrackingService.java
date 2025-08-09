@@ -17,6 +17,7 @@
  */
 package org.apache.cassandra.replication;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -151,7 +152,19 @@ public class MutationTrackingService
         KeyspaceShards keyspaceShards = shards.get(keyspace);
         Preconditions.checkNotNull(keyspaceShards);
 
-        // TODO(expected): Clean up incoming SSTables to remove any existing CoordinatorLogOffsets
+        // Clean up incoming SSTables to remove any existing CoordinatorLogOffsets, can't be trusted
+        for (SSTableReader sstable : sstables)
+        {
+            try
+            {
+                sstable.mutateCoordinatorLogOffsetsAndReload(ImmutableCoordinatorLogOffsets.NONE);
+            }
+            catch (IOException e)
+            {
+                throw new RuntimeException(e);
+            }
+        }
+
         CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables);
         logger.info("Split input SSTables into transfers {}", transfers);
 
@@ -186,13 +199,6 @@ public class MutationTrackingService
     void activatePendingTransfer(TimeUUID planId, MutationId transferId)
     {
         PendingLocalTransfer pending = getPendingTransfer(planId);
-        // TEMPORARY: Need to fix bug causing empty streams
-        // See comment in PendingLocalTransfers.markActivating
-        if (pending == null)
-        {
-            logger.warn("Can't activate transfer {} {}", planId, transferId);
-            return;
-        }
         Preconditions.checkNotNull(pending);
         pending.activate(transferId);
         instance.transfers.markActivated(pending.planId, transferId);
@@ -365,6 +371,19 @@ public class MutationTrackingService
         {
             MutationSummary.Builder builder = new MutationSummary.Builder(tableId);
             lookUp(key.getToken()).addSummaryForKey(key.getToken(), includePending, builder);
+
+            /* REVIEW
+            Like we do for data reads, summaries need to include the set of transfers they're aware of, in order to
+            guarantee monotonic reads. Read coordinators need to know whether to read-reconcile and activate a pending
+            transfer.
+
+            I was thinking of doing that by fetching the View (volatile read) and loading all the relevant SSTables'
+            transfer IDs would be one way to do that.
+
+            The alternative is to integrate SSTable import with CoordinatorLog, and ensure that we atomically update
+            the UnreconciledMutations and View, and avoid any tearing.
+            */
+
             return builder.build();
         }
 
@@ -444,7 +463,7 @@ public class MutationTrackingService
 
         private static CoordinatedTransfers create(KeyspaceShards shards, Collection<SSTableReader> sstables)
         {
-            // Expensive - add a metric
+            // Expensive - add a metric?
             // TODO(expected): Fail if incoming transfer is outside owned shard ranges
             SSTableIntervalTree intervals = SSTableIntervalTree.buildSSTableIntervalTree(sstables);
             List<CoordinatedTransfer> transfers = new ArrayList<>();

@@ -29,7 +29,7 @@ import com.google.common.base.Preconditions;
 import org.apache.cassandra.db.filter.DataLimits;
 import org.apache.cassandra.index.Index;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.replication.MutationId;
+import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.utils.MonotonicClock;
 import org.apache.cassandra.utils.concurrent.OpOrder;
@@ -55,8 +55,12 @@ public class ReadExecutionController implements AutoCloseable
     private final RepairedDataInfo repairedDataInfo;
     private long oldestUnrepairedTombstone = Long.MAX_VALUE;
 
-    // TODO(rebase): should be the single-threaded mutable coordinator log offsets
-    private Set<MutationId> transferIds = null;
+    /*
+     * Track bulk transfers involved in the read, so we can do read reconciliation.
+     * These come from the ViewFragment, not the SSTable read path, so bloom filters + short-circuiting SSTable scans
+     * will still include the total set of relevant bulk transfers.
+     */
+    private Set<ShortMutationId> transferIds = null;
 
     ReadExecutionController(ReadCommand command,
                             OpOrder.Group baseOp,
@@ -254,16 +258,12 @@ public class ReadExecutionController implements AutoCloseable
 
     public void addTransferIds(ColumnFamilyStore.ViewFragment view)
     {
-        // TODO: Not all sstables in the view are transfers, shouldn't add all CoordinatorLogOffsets
         transferIds = new HashSet<>();
         for (SSTableReader sstable : view.sstables)
-        {
-            // TODO(rebase): once we switch to CoordinatorLogOffsets, collect all transfer IDs here
-            // transferIds.addAll(sstable.getCoordinatorLogOffsets());
-        }
+            transferIds.addAll(sstable.getCoordinatorLogOffsets().transfers());
     }
 
-    public Iterator<MutationId> getTransferIds()
+    public Iterator<ShortMutationId> getTransferIds()
     {
         return transferIds.iterator();
     }

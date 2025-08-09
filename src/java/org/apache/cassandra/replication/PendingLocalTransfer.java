@@ -80,7 +80,7 @@ public class PendingLocalTransfer
 
             // Modify SSTables metadata to durably set transfer ID before importing
             ImmutableCoordinatorLogOffsets logOffsets = new ImmutableCoordinatorLogOffsets.Builder()
-                                                  .add(transferId)
+                                                  .addTransfer(transferId)
                                                   .build();
             try
             {

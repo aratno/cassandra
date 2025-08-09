@@ -36,7 +36,6 @@ import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.replication.Log2OffsetsMap;
-import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.replication.MutationJournal;
 import org.apache.cassandra.replication.MutationSummary;
 import org.apache.cassandra.replication.ReconciliationPlan;
@@ -550,7 +549,7 @@ public class TrackedLocalReadCoordinator
         }
     }
 
-    private static MutationSummary merge(Iterator<MutationId> transferIds, MutationSummary summary)
+    private static MutationSummary merge(Iterator<ShortMutationId> transferIds, MutationSummary summary)
     {
         if (transferIds == null || !transferIds.hasNext())
             return summary;
@@ -568,7 +567,7 @@ public class TrackedLocalReadCoordinator
 
         while (transferIds.hasNext())
         {
-            MutationId id = transferIds.next();
+            ShortMutationId id = transferIds.next();
             builder.builderForLog(id).unreconciled.add(id.offset());
         }
         return builder.build();
