@@ -951,6 +951,8 @@ public class SinglePartitionReadCommand extends ReadCommand implements SinglePar
     {
         Tracing.trace("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.select(View.select(SSTableSet.LIVE, partitionKey()));
+        if (cfs.metadata().replicationType().isTracked())
+            controller.addTransferIds(view);
 
         ImmutableBTreePartition result = null;
         SSTableReadMetricsCollector metricsCollector = new SSTableReadMetricsCollector();
@@ -973,6 +975,8 @@ public class SinglePartitionReadCommand extends ReadCommand implements SinglePar
 
         /* add the SSTables on disk */
         view.sstables.sort(SSTableReader.maxTimestampDescending);
+        if (cfs.metadata().replicationType().isTracked())
+            logger.trace("Executing read against SSTables {}", view.sstables);
         // read sorted sstables
         for (SSTableReader sstable : view.sstables)
         {

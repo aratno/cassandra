@@ -260,7 +260,8 @@ public enum Verb
     TRACKED_SUMMARY_RSP        (910, P2, readTimeout,  REQUEST_RESPONSE, () -> TrackedSummaryResponse.serializer,     () -> TrackedSummaryResponse.verbHandler                           ),
     TRACKED_SUMMARY_REQ        (911, P3, readTimeout,  READ,             () -> TrackedRead.SummaryRequest.serializer, () -> TrackedRead.verbHandler,           TRACKED_SUMMARY_RSP       ),
 
-    TRACKED_TRANSFER_ACTIVATE  (912, P1, rpcTimeout, MISC, () -> TransferActivation.serializer, () -> TransferActivation.verbHandler),
+    TRACKED_TRANSFER_ACTIVATE_RSP (912, P1, rpcTimeout, MISC, () -> NoPayload.serializer, () -> ResponseVerbHandler.instance),
+    TRACKED_TRANSFER_ACTIVATE_REQ (913, P1, rpcTimeout, MISC, () -> TransferActivation.serializer, () -> TransferActivation.verbHandler, TRACKED_TRANSFER_ACTIVATE_RSP),
 
     INITIATE_DATA_MOVEMENTS_RSP (814, P1, rpcTimeout, MISC, () -> NoPayload.serializer,             () -> ResponseVerbHandler.instance                                  ),
     INITIATE_DATA_MOVEMENTS_REQ (815, P1, rpcTimeout, MISC, () -> DataMovement.serializer,          () -> DataMovementVerbHandler.instance, INITIATE_DATA_MOVEMENTS_RSP ),

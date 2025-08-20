@@ -182,8 +182,15 @@ public class MutationTrackingTest extends TestBaseImpl
             for (IInvokableInstance instance : cluster)
             {
                 logger.info("Checking propagation of imported SSTable to {}", instance.config().num());
-                Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
-                AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                // SinglePartition + PartitionRange
+                {
+                    Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE + " WHERE k = 1"));
+                    AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                }
+                {
+                    Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
+                    AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                }
             }
         }
     }

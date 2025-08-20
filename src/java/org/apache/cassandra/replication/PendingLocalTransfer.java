@@ -67,11 +67,12 @@ public class PendingLocalTransfer
      * TODO: Clear out the row cache and counter cache, like {@link CassandraStreamReceiver#finished}.
      * TODO: Don't add to the live set if coordinator and not an owner for the range
      */
-    public void activate(MutationId transferId)
+    public void activate(TransferActivation activation)
     {
         logger.info("Activating transfer {}, {} ms since pending", this, currentTimeMillis() - createdAt);
         ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(tableId);
         Preconditions.checkNotNull(cfs);
+        Preconditions.checkState(!sstables.isEmpty());
 
         // Ensure no lingering mutation IDs, only transfer IDs
         for (SSTableReader sstable : sstables)
@@ -80,7 +81,7 @@ public class PendingLocalTransfer
 
             // Modify SSTables metadata to durably set transfer ID before importing
             ImmutableCoordinatorLogOffsets logOffsets = new ImmutableCoordinatorLogOffsets.Builder()
-                                                  .addTransfer(transferId)
+                                                  .addTransfer(activation.transferId)
                                                   .build();
             try
             {
@@ -92,6 +93,11 @@ public class PendingLocalTransfer
             }
         }
 
+        if (activation.dryRun)
+        {
+            logger.info("Not adding SSTables to live set for dryRun {}", activation);
+            return;
+        }
         cfs.getTracker().addSSTablesTracked(sstables);
     }
 

@@ -22,6 +22,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 
 import com.google.common.base.Preconditions;
@@ -32,8 +34,14 @@ import org.slf4j.LoggerFactory;
 import org.apache.cassandra.db.streaming.CassandraOutgoingFile;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
+import org.apache.cassandra.exceptions.RequestFailureReason;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.locator.InetAddressAndPort;
+import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.NoPayload;
+import org.apache.cassandra.net.RequestCallbackWithFailure;
+import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.streaming.OutgoingStream;
 import org.apache.cassandra.streaming.StreamOperation;
 import org.apache.cassandra.streaming.StreamPlan;
@@ -42,6 +50,8 @@ import org.apache.cassandra.streaming.StreamState;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.tcm.membership.NodeId;
 import org.apache.cassandra.utils.TimeUUID;
+import org.apache.cassandra.utils.concurrent.AsyncFuture;
+import org.apache.cassandra.utils.concurrent.Future;
 
 /**
  * A transfer for a single replica set.
@@ -85,7 +95,7 @@ public class CoordinatedTransfer
     }
 
     /**
-     * Returns whether or not any streaming actually happened. If not, there's nothing to activate.
+     * Returns whether any streaming actually happened. If not, there's nothing to activate.
      */
     public boolean stream()
     {
@@ -128,6 +138,57 @@ public class CoordinatedTransfer
 
         this.planId = plan.planId();
         return true;
+    }
+
+    public Future<Void> activate()
+    {
+        // First phase is dryRun to ensure data is present on disk, then second phase does the actual import. This
+        // ensures that if something goes wrong (like a topology change during import), we don't have divergence.
+        return activate(new TransferActivation(this, true))
+               .andThenAsync(prepared -> activate(new TransferActivation(this, false)));
+    }
+
+    private ActivationCallback activate(TransferActivation activation)
+    {
+        Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
+        ActivationCallback cb = new ActivationCallback();
+
+        for (InetAddressAndPort participant : participants)
+        {
+            logger.debug("Sending {} to peer {}", activation, participant);
+            MessagingService.instance().sendWithCallback(msg, participant, cb);
+        }
+        return cb;
+    }
+
+    private class ActivationCallback extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
+    {
+        // TODO: Improve
+        final ConcurrentMap<InetAddressAndPort, InetAddressAndPort> acks;
+
+        public ActivationCallback()
+        {
+            ConcurrentMap<InetAddressAndPort, InetAddressAndPort> acks = new ConcurrentHashMap<>(CoordinatedTransfer.this.participants.size());
+            for (InetAddressAndPort participant : CoordinatedTransfer.this.participants)
+                acks.put(participant, participant);
+            this.acks = acks;
+        }
+
+        @Override
+        public void onResponse(Message<NoPayload> msg)
+        {
+            logger.debug("Activation success response: {}", msg.from());
+            acks.remove(msg.from());
+            if (acks.isEmpty())
+                trySuccess(null);
+        }
+
+        @Override
+        public void onFailure(InetAddressAndPort from, RequestFailureReason failureReason)
+        {
+            logger.debug("Activation failure response: {} {}", from, failureReason);
+            tryFailure(null);
+        }
     }
 
     @Override

@@ -18,6 +18,7 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Set;
@@ -25,6 +26,9 @@ import java.util.concurrent.TimeUnit;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.filter.DataLimits;
 import org.apache.cassandra.index.Index;
@@ -38,6 +42,8 @@ import static org.apache.cassandra.utils.MonotonicClock.Global.preciseTime;
 
 public class ReadExecutionController implements AutoCloseable
 {
+    private static final Logger logger = LoggerFactory.getLogger(ReadExecutionController.class);
+
     private static final long NO_SAMPLING = Long.MIN_VALUE;
 
     // For every reads
@@ -260,7 +266,11 @@ public class ReadExecutionController implements AutoCloseable
     {
         transferIds = new HashSet<>();
         for (SSTableReader sstable : view.sstables)
-            transferIds.addAll(sstable.getCoordinatorLogOffsets().transfers());
+        {
+            Collection<? extends ShortMutationId> ids = sstable.getCoordinatorLogOffsets().transfers();
+            logger.trace("Adding transfer IDs from SSTable {} {}", sstable, ids);
+            transferIds.addAll(ids);
+        }
     }
 
     public Iterator<ShortMutationId> getTransferIds()

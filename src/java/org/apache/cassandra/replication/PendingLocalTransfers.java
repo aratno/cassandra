@@ -106,7 +106,7 @@ class PendingLocalTransfers
     }
 
     // TODO: Build indexed view for access, don't scan
-    Collection<TransferActivation> getActivated(long logId)
+    Collection<TransferActivation> getActivated(long logId, boolean dryRun)
     {
         logger.debug("getActivated: {}", logId);
         List<TransferActivation> activated = new ArrayList<>();
@@ -115,7 +115,7 @@ class PendingLocalTransfers
             if (entry.state == State.ACTIVATED
                 && entry.transferId != null && entry.transferId.logId() == logId)
             {
-                activated.add(new TransferActivation(entry.transfer.planId, entry.transferId));
+                activated.add(new TransferActivation(entry.transfer.planId, entry.transferId, dryRun));
             }
         }
 

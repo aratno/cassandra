@@ -58,6 +58,8 @@ import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Interval;
 import org.apache.cassandra.utils.TimeUUID;
+import org.apache.cassandra.utils.concurrent.Future;
+import org.apache.cassandra.utils.concurrent.FutureCombiner;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -145,29 +147,17 @@ public class MutationTrackingService
         getOrCreate(mutation.getKeyspaceName()).finishWriting(mutation);
     }
 
-    public void startTransfer(String keyspace, Set<SSTableReader> sstables)
+    public Future<?> startTransfer(String keyspace, Set<SSTableReader> sstables)
     {
         logger.info("Starting tracked bulk transfer for keyspace {} sstables {}", keyspace, sstables);
 
         KeyspaceShards keyspaceShards = shards.get(keyspace);
         Preconditions.checkNotNull(keyspaceShards);
 
-        // Clean up incoming SSTables to remove any existing CoordinatorLogOffsets, can't be trusted
-        for (SSTableReader sstable : sstables)
-        {
-            try
-            {
-                sstable.mutateCoordinatorLogOffsetsAndReload(ImmutableCoordinatorLogOffsets.NONE);
-            }
-            catch (IOException e)
-            {
-                throw new RuntimeException(e);
-            }
-        }
-
         CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables);
         logger.info("Split input SSTables into transfers {}", transfers);
 
+        Collection<Future<Void>> transferring = new ArrayList<>(transfers.size());
         for (CoordinatedTransfer transfer : transfers)
         {
             // Nothing to stream, so nothing to activate
@@ -179,10 +169,9 @@ public class MutationTrackingService
             streams.
             */
             logger.debug("Streaming completed for plan {}, activating transfer", transfer.planId);
-            keyspaceShards.activateTransfer(transfer);
-
-            logger.debug("Done activating transfer {}", transfer.planId);
+            transferring.add(keyspaceShards.activate(transfer));
         }
+        return FutureCombiner.allOf(transferring);
     }
 
     PendingLocalTransfer getPendingTransfer(TimeUUID planId)
@@ -196,17 +185,18 @@ public class MutationTrackingService
         logger.debug("Saved pending transfer for tracked table {}, awaiting activation", transfer);
     }
 
-    void activatePendingTransfer(TimeUUID planId, MutationId transferId)
+    void activatePendingTransfer(TransferActivation activation)
     {
-        PendingLocalTransfer pending = getPendingTransfer(planId);
+        PendingLocalTransfer pending = getPendingTransfer(activation.planId);
         Preconditions.checkNotNull(pending);
-        pending.activate(transferId);
-        instance.transfers.markActivated(pending.planId, transferId);
+        pending.activate(activation);
+        if (!activation.dryRun)
+            instance.transfers.markActivated(pending.planId, activation.transferId);
     }
 
-    public Collection<TransferActivation> getActivatedTransfers(long logId)
+    public Collection<TransferActivation> getActivatedTransfers(long logId, boolean dryRun)
     {
-        return instance.transfers.getActivated(logId);
+        return instance.transfers.getActivated(logId, dryRun);
     }
 
     public MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
@@ -345,7 +335,7 @@ public class MutationTrackingService
             lookUp(mutation).finishWriting(mutation);
         }
 
-        public void activateTransfer(CoordinatedTransfer transfer)
+        public Future<Void> activate(CoordinatedTransfer transfer)
         {
             Preconditions.checkNotNull(transfer.planId);
             Preconditions.checkState(transfer.transferId.isNone());
@@ -353,18 +343,7 @@ public class MutationTrackingService
             MutationId transferId = lookUp(transfer.range).currentTransferLog.nextId();
             instance.transfers.markActivating(transfer, transferId);
 
-            /* TODO
-            Make this two-phase, where the first phase ensures data is present on disk, and the second phase does the actual
-            import. This ensures that if something goes wrong (like a topology change during import), we don't have
-            divergence.
-            */
-            TransferActivation activate = new TransferActivation(transfer);
-            Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE, activate);
-            for (InetAddressAndPort participant : transfer.participants)
-            {
-                logger.debug("Sending {} to peer {}", activate, participant);
-                MessagingService.instance().send(msg, participant);
-            }
+            return transfer.activate();
         }
 
         MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
@@ -463,6 +442,19 @@ public class MutationTrackingService
 
         private static CoordinatedTransfers create(KeyspaceShards shards, Collection<SSTableReader> sstables)
         {
+            // Clean up incoming SSTables to remove any existing CoordinatorLogOffsets, can't be trusted
+            for (SSTableReader sstable : sstables)
+            {
+                try
+                {
+                    sstable.mutateCoordinatorLogOffsetsAndReload(ImmutableCoordinatorLogOffsets.NONE);
+                }
+                catch (IOException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+
             // Expensive - add a metric?
             // TODO(expected): Fail if incoming transfer is outside owned shard ranges
             SSTableIntervalTree intervals = SSTableIntervalTree.buildSSTableIntervalTree(sstables);
@@ -488,6 +480,11 @@ public class MutationTrackingService
         public Iterator<CoordinatedTransfer> iterator()
         {
             return transfers.iterator();
+        }
+
+        public int size()
+        {
+            return transfers.size();
         }
     }
 

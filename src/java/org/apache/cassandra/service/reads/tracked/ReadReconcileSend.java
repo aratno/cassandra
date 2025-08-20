@@ -142,9 +142,9 @@ public class ReadReconcileSend
                     long logId = logIds.nextLong();
 
                     // The current node knows the PlanID for the given TransferID, since it's already been activated
-                    Collection<TransferActivation> activated = MutationTrackingService.instance.getActivatedTransfers(logId);
+                    Collection<TransferActivation> activated = MutationTrackingService.instance.getActivatedTransfers(logId, false);
 
-                    // A given logId is either regular mutations, or for transfers,
+                    // A given logId is either regular mutations, or for transfers
                     if (activated.isEmpty())
                         mutationIds.addAll(sync.plan.ids(logId));
                     else

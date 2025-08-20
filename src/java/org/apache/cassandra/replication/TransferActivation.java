@@ -22,34 +22,39 @@ import java.io.IOException;
 
 import com.google.common.base.Preconditions;
 
+import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.Message;
+import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.NoPayload;
 import org.apache.cassandra.utils.TimeUUID;
 
 public class TransferActivation
 {
-    private final TimeUUID planId;
-    private final MutationId transferId;
+    public final TimeUUID planId;
+    public final MutationId transferId;
+    public final boolean dryRun;
 
-    TransferActivation(CoordinatedTransfer transfer)
+    TransferActivation(CoordinatedTransfer transfer, boolean dryRun)
     {
-        this(transfer.planId, transfer.transferId);
+        this(transfer.planId, transfer.transferId, dryRun);
     }
 
-    TransferActivation(TimeUUID planId, MutationId transferId)
+    TransferActivation(TimeUUID planId, MutationId transferId, boolean dryRun)
     {
         Preconditions.checkArgument(!transferId.isNone());
         Preconditions.checkNotNull(planId);
         this.planId = planId;
         this.transferId = transferId;
+        this.dryRun = dryRun;
     }
 
     public void apply()
     {
-        MutationTrackingService.instance.activatePendingTransfer(planId, transferId);
+        MutationTrackingService.instance.activatePendingTransfer(this);
     }
 
     public static final Serializer serializer = new Serializer();
@@ -61,6 +66,7 @@ public class TransferActivation
         {
             TimeUUID.Serializer.instance.serialize(activate.planId, out, version);
             MutationId.serializer.serialize(activate.transferId, out, version);
+            out.writeBoolean(activate.dryRun);
         }
 
         @Override
@@ -68,7 +74,8 @@ public class TransferActivation
         {
             TimeUUID planId = TimeUUID.Serializer.instance.deserialize(in, version);
             MutationId transferId = MutationId.serializer.deserialize(in, version);
-            return new TransferActivation(planId, transferId);
+            boolean dryRun = in.readBoolean();
+            return new TransferActivation(planId, transferId, dryRun);
         }
 
         @Override
@@ -77,6 +84,7 @@ public class TransferActivation
             long size = 0;
             size += TimeUUID.Serializer.instance.serializedSize(activate.planId, version);
             size += MutationId.serializer.serializedSize(activate.transferId, version);
+            size += TypeSizes.BOOL_SIZE;
             return size;
         }
     }
@@ -84,9 +92,10 @@ public class TransferActivation
     public static final IVerbHandler<TransferActivation> verbHandler = new IVerbHandler<>()
     {
         @Override
-        public void doVerb(Message<TransferActivation> msg) throws IOException
+        public void doVerb(Message<TransferActivation> msg)
         {
             msg.payload.apply();
+            MessagingService.instance().respond(NoPayload.noPayload, msg);
         }
     };
 
@@ -96,6 +105,7 @@ public class TransferActivation
         return "Activate{" +
                "planId=" + planId +
                ", transferId=" + transferId +
+               ", dryRun=" + dryRun +
                '}';
     }
 }

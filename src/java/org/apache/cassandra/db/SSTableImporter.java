@@ -259,7 +259,7 @@ public class SSTableImporter
         private static void start(String keyspace, Set<SSTableReader> sstables)
         {
             // TODO: This isn't cheap - think about what thread it should happen on
-            MutationTrackingService.instance.startTransfer(keyspace, sstables);
+            MutationTrackingService.instance.startTransfer(keyspace, sstables).awaitUninterruptibly();
         }
     }
 
