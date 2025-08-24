@@ -45,19 +45,20 @@ public class Shard
     private final Epoch sinceEpoch;
     private final NonBlockingHashMapLong<CoordinatorLog> logs;
     // TODO (expected): add support for log rotation
-    private final CoordinatorLog.CoordinatorLogPrimary currentLocalLog;
+    // TODO: make private
+    protected final CoordinatorLog.CoordinatorLogPrimary currentLocalLog;
 
     /**
-     * This log exists to assign transfer IDs within the current shard.
+     * TODO: Improve this doc to outline transfer ID propagation.
      *
-     * Transfer IDs shouldn't be included in read summaries via collect, because concurrent reads may have different
-     * ViewFragments, with different transfers present.
-     * Instead, they'll be included via {@link ReadExecutionController#addTransferIds(ColumnFamilyStore.ViewFragment)}.
+     * This log exists to assign transfer IDs for coordinated transfers within the current shard.
      *
-     * Even though this log isn't used for reads, it is still necessary for global reconciliation. During
-     * reconciliation,
+     * For data reads, transfer IDs shouldn't be included in read summaries via collect, because concurrent reads may
+     * have different ViewFragments different transfers present, and we need to ensure the summaries match the data read
+     * from the View. Instead, they'll be included via {@link ReadExecutionController#addTransferIds(ColumnFamilyStore.ViewFragment)}.
+     *
+     * For summary reads, transfer IDs will still be served for collect via {@link UnreconciledMutationsReplica}.
      */
-    protected final CoordinatorLog.CoordinatorLogPrimary currentTransferLog;
 
     Shard(String keyspace, Range<Token> tokenRange, int localHostId, Participants participants, Epoch sinceEpoch, IntSupplier logIdProvider)
     {
@@ -73,11 +74,6 @@ public class Shard
         CoordinatorLogId localLogId = currentLocalLog.logId;
         Preconditions.checkArgument(!localLogId.isNone());
         logs.put(localLogId.asLong(), currentLocalLog);
-
-        this.currentTransferLog = startNewLog(localHostId, logIdProvider.getAsInt(), participants);
-        CoordinatorLogId transferLogId = currentTransferLog.logId;
-        Preconditions.checkArgument(!transferLogId.isNone());
-        logs.put(transferLogId.asLong(), currentLocalLog);
     }
 
     MutationId nextId()
@@ -89,6 +85,12 @@ public class Shard
     {
         int onHostId = ClusterMetadata.current().directory.peerId(onHost).id();
         getOrCreate(mutationId).receivedWriteResponse(mutationId, onHostId);
+    }
+
+    void receivedActivationAck(TransferActivation transfer, InetAddressAndPort onHost)
+    {
+        int onHostId = ClusterMetadata.current().directory.peerId(onHost).id();
+        getOrCreate(transfer.transferId).receivedActivationAck(transfer.transferId, onHostId);
     }
 
     void updateReplicatedOffsets(List<? extends Offsets> offsets, InetAddressAndPort onHost)

@@ -295,6 +295,7 @@ public class TrackedLocalReadCoordinator
 
             Map<InetAddressAndPort, MutationSummary> summaryMap = new HashMap<>();
             summaries.snapshot().forEach(rc -> summaryMap.put(rc.from, rc.summary));
+            logger.trace("Read coordinator building reconciliation plan for summaries: {}", summaryMap);
 
             Map<InetAddressAndPort, ReconciliationPlan> reconciliations = ReconciliationPlan.calculateReconciliation(summaryMap);
 
@@ -319,7 +320,7 @@ public class TrackedLocalReadCoordinator
             if (this.read != null)
                 return this;
 
-            logger.trace("In progress read received for {}", readId);
+            logger.trace("In progress read received for {}: {}", readId, summary);
             this.read = read;
             summaries.add(new ReceivedSummary(FBUtilities.getBroadcastAddressAndPort(), summary));
 

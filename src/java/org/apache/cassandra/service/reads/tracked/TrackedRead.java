@@ -471,6 +471,7 @@ public abstract class TrackedRead<E extends Endpoints<E>, P extends ReplicaPlan.
         {
             MutationSummary summary = command.createMutationSummary(false);
             TrackedSummaryResponse response = new TrackedSummaryResponse(readId, summary);
+            logger.trace("Sending summary {} to {}", response, message.respondTo());
             MessagingService.instance().send(message.responseWith(response), message.respondTo());
         }
 

@@ -27,12 +27,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.streaming.CassandraStreamReceiver;
-import org.apache.cassandra.io.IVersionedSerializer;
+import org.apache.cassandra.dht.AbstractBounds;
+import org.apache.cassandra.dht.Range;
+import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-import org.apache.cassandra.io.util.DataInputPlus;
-import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.schema.TableId;
+import org.apache.cassandra.tcm.ClusterMetadata;
+import org.apache.cassandra.tcm.ownership.ReplicaGroups;
 import org.apache.cassandra.utils.TimeUUID;
 
 import static org.apache.cassandra.utils.Clock.Global.currentTimeMillis;
@@ -48,12 +51,46 @@ public class PendingLocalTransfer
     final TableId tableId;
     final Collection<SSTableReader> sstables;
     final long createdAt = currentTimeMillis();
+    transient String keyspace;
+    transient Range<Token> range;
 
     public PendingLocalTransfer(TableId tableId, TimeUUID planId, Collection<SSTableReader> sstables)
     {
+        Preconditions.checkState(!sstables.isEmpty());
         this.tableId = tableId;
         this.planId = planId;
         this.sstables = sstables;
+        this.keyspace = Objects.requireNonNull(ColumnFamilyStore.getIfExists(tableId)).keyspace.getName();
+        this.range = shardRange(keyspace, sstables);
+    }
+
+    /**
+     * Pending transfers should be within a single shard, which are aligned to natural ranges.
+     * See ({@link MutationTrackingService.KeyspaceShards#make}).
+     */
+    private static Range<Token> shardRange(String keyspace, Collection<SSTableReader> sstables)
+    {
+        ClusterMetadata cm = ClusterMetadata.current();
+        ReplicaGroups writes = cm.placements.get(Keyspace.open(keyspace).getMetadata().params.replication).writes;
+        Range<Token> range = null;
+        for (SSTableReader sstable : sstables)
+        {
+            if (range == null)
+            {
+                Token first = sstable.getFirst().getToken();
+                range = writes.forRange(first).range();
+            }
+            else
+            {
+                AbstractBounds<Token> bounds = sstable.getBounds();
+                Preconditions.checkState(!range.isTrulyWrapAround());
+                Preconditions.checkState(range.contains(bounds.left));
+                Preconditions.checkState(range.contains(bounds.right));
+            }
+        }
+
+        Preconditions.checkNotNull(range);
+        return range;
     }
 
     /**
@@ -92,36 +129,12 @@ public class PendingLocalTransfer
                 throw new RuntimeException(e);
             }
         }
-
         if (activation.dryRun)
         {
             logger.info("Not adding SSTables to live set for dryRun {}", activation);
             return;
         }
         cfs.getTracker().addSSTablesTracked(sstables);
-    }
-
-    public static final Serializer serializer = new Serializer();
-
-    public static class Serializer implements IVersionedSerializer<PendingLocalTransfer>
-    {
-        @Override
-        public void serialize(PendingLocalTransfer pending, DataOutputPlus out, int version) throws IOException
-        {
-
-        }
-
-        @Override
-        public PendingLocalTransfer deserialize(DataInputPlus in, int version) throws IOException
-        {
-            return null;
-        }
-
-        @Override
-        public long serializedSize(PendingLocalTransfer pending, int version)
-        {
-            return 0;
-        }
     }
 
     @Override

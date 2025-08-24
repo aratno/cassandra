@@ -130,6 +130,14 @@ public class MutationTrackingService
         getOrCreate(keyspace).receivedWriteResponse(token, mutationId, onHost);
     }
 
+    public void receivedActivationAck(MutationId transferId, InetAddressAndPort onHost)
+    {
+        Preconditions.checkArgument(!transferId.isNone());
+        TransferActivation transfer = instance.transfers.getTransfer(transferId);
+        PendingLocalTransfer pending = instance.transfers.getActivated(transfer.planId);
+        getOrCreate(pending.keyspace).receivedActivationAck(pending, transfer, onHost);
+    }
+
     public void updateReplicatedOffsets(String keyspace, Range<Token> range, List<? extends Offsets> offsets, InetAddressAndPort onHost)
     {
         getOrCreate(keyspace).updateReplicatedOffsets(range, offsets, onHost);
@@ -157,7 +165,7 @@ public class MutationTrackingService
         CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables);
         logger.info("Split input SSTables into transfers {}", transfers);
 
-        Collection<Future<Void>> transferring = new ArrayList<>(transfers.size());
+        Collection<Future<?>> transferring = new ArrayList<>(transfers.size());
         for (CoordinatedTransfer transfer : transfers)
         {
             // Nothing to stream, so nothing to activate
@@ -187,16 +195,21 @@ public class MutationTrackingService
 
     void activatePendingTransfer(TransferActivation activation)
     {
+        logger.trace("activatePendingTransfer {}", activation);
         PendingLocalTransfer pending = getPendingTransfer(activation.planId);
         Preconditions.checkNotNull(pending);
         pending.activate(activation);
+
         if (!activation.dryRun)
+        {
             instance.transfers.markActivated(pending.planId, activation.transferId);
+            shards.get(pending.keyspace).lookUp(pending.range).receivedActivationAck(activation, FBUtilities.getBroadcastAddressAndPort());
+        }
     }
 
-    public Collection<TransferActivation> getActivatedTransfers(long logId, boolean dryRun)
+    public TransferActivation getTransfer(ShortMutationId transferId)
     {
-        return instance.transfers.getActivated(logId, dryRun);
+        return instance.transfers.getTransfer(transferId);
     }
 
     public MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
@@ -320,6 +333,12 @@ public class MutationTrackingService
             lookUp(token).receivedWriteResponse(mutationId, onHost);
         }
 
+        void receivedActivationAck(PendingLocalTransfer pending, TransferActivation transfer, InetAddressAndPort onHost)
+        {
+            logger.trace("receivedActivationAck {} {}", pending, onHost);
+            lookUp(pending.range).receivedActivationAck(transfer, onHost);
+        }
+
         void updateReplicatedOffsets(Range<Token> range, List<? extends Offsets> offsets, InetAddressAndPort onHost)
         {
             shards.get(range).updateReplicatedOffsets(offsets, onHost);
@@ -335,12 +354,12 @@ public class MutationTrackingService
             lookUp(mutation).finishWriting(mutation);
         }
 
-        public Future<Void> activate(CoordinatedTransfer transfer)
+        public Future<?> activate(CoordinatedTransfer transfer)
         {
             Preconditions.checkNotNull(transfer.planId);
             Preconditions.checkState(transfer.transferId.isNone());
 
-            MutationId transferId = lookUp(transfer.range).currentTransferLog.nextId();
+            MutationId transferId = lookUp(transfer.range).nextId();
             instance.transfers.markActivating(transfer, transferId);
 
             return transfer.activate();

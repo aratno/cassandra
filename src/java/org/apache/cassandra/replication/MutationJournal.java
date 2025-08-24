@@ -87,6 +87,15 @@ public class MutationJournal
         return journal.readLast(id, consumer);
     }
 
+    public boolean readIfExists(ShortMutationId id, Collection<Mutation> into)
+    {
+        Mutation mutation = read(id);
+        if (mutation == null)
+            return false;
+        into.add(mutation);
+        return true;
+    }
+
     public void readAll(Iterable<ShortMutationId> ids, Collection<Mutation> into)
     {
         for (ShortMutationId id : ids)

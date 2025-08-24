@@ -102,7 +102,11 @@ public class ReadReconcileReceive
             // When read participant misses an activate, thinks transfer is still pending
             // TODO: Handle missing transfers? Don't want to block a read on streaming.
             // Should be able to prevent this, even when ownership changes race with activation
-            receive.transfers.forEach(TransferActivation::apply);
+            if (!receive.transfers.isEmpty())
+            {
+                logger.debug("Activating transfers on ReadReconcile: {}", receive.transfers);
+                receive.transfers.forEach(TransferActivation::apply);
+            }
 
             // TODO: Figure out how to augment local reads when transfers happen
             if (!MutationTrackingService.instance.localReads().receiveMutations(receive.readId, receive.syncId, receive.mutations))

@@ -41,9 +41,9 @@ public abstract class Log2OffsetsMap<T extends Offsets> implements Iterable<Shor
         return Iterables.concat(offsetMap().values()).iterator();
     }
 
-    public Iterator<ShortMutationId> ids(long logId)
+    public Iterable<ShortMutationId> ids(long logId)
     {
-        return offsetMap().get(logId).iterator();
+        return offsetMap().get(logId);
     }
 
     public LongIterator logIds()

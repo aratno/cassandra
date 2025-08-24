@@ -1996,12 +1996,6 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean, Memtable.Owner
     {
         View view = data.getView();
         List<SSTableReader> sstables = Lists.newArrayList(Objects.requireNonNull(filter.apply(view)));
-        if (metadata().replicationType().isTracked())
-        {
-            logger.trace("View before filter {}", view);
-            logger.trace("View after filter {}", sstables);
-            logger.trace("Stacktrace", new RuntimeException());
-        }
         return new ViewFragment(sstables, view.getAllMemtables());
     }
 

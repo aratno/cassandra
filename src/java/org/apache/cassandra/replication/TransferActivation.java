@@ -22,6 +22,9 @@ import java.io.IOException;
 
 import com.google.common.base.Preconditions;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataInputPlus;
@@ -34,6 +37,8 @@ import org.apache.cassandra.utils.TimeUUID;
 
 public class TransferActivation
 {
+    private static final Logger logger = LoggerFactory.getLogger(TransferActivation.class);
+
     public final TimeUUID planId;
     public final MutationId transferId;
     public final boolean dryRun;
@@ -89,15 +94,17 @@ public class TransferActivation
         }
     }
 
-    public static final IVerbHandler<TransferActivation> verbHandler = new IVerbHandler<>()
+    public static class VerbHandler implements IVerbHandler<TransferActivation>
     {
         @Override
-        public void doVerb(Message<TransferActivation> msg)
+        public void doVerb(Message<TransferActivation> msg) throws IOException
         {
             msg.payload.apply();
             MessagingService.instance().respond(NoPayload.noPayload, msg);
         }
-    };
+    }
+
+    public static final VerbHandler verbHandler = new VerbHandler();
 
     @Override
     public String toString()

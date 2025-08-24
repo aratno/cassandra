@@ -19,7 +19,6 @@ package org.apache.cassandra.service.reads.tracked;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -42,6 +41,7 @@ import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.replication.Log2OffsetsMap;
 import org.apache.cassandra.replication.MutationJournal;
 import org.apache.cassandra.replication.MutationTrackingService;
+import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.replication.TransferActivation;
 import org.apache.cassandra.utils.CollectionSerializer;
 
@@ -133,26 +133,24 @@ public class ReadReconcileSend
             {
                 // TODO (expected): do not deser just to serialize again, if same messaging versions (common case)
                 // TODO (expected): don't materialize mutation ids, look up from offset collections
-                // TODO (expected): Add size hint for mutationIds since we expect transfers to be rare
-                Log2OffsetsMap.Mutable mutationIds = new Log2OffsetsMap.Mutable();
+                List<Mutation> mutations = new ArrayList<>(sync.plan.idCount());
                 List<TransferActivation> transfers = new ArrayList<>();
                 LongIterator logIds = sync.plan.logIds();
                 while (logIds.hasNext())
                 {
                     long logId = logIds.nextLong();
-
-                    // The current node knows the PlanID for the given TransferID, since it's already been activated
-                    Collection<TransferActivation> activated = MutationTrackingService.instance.getActivatedTransfers(logId, false);
-
-                    // A given logId is either regular mutations, or for transfers
-                    if (activated.isEmpty())
-                        mutationIds.addAll(sync.plan.ids(logId));
-                    else
-                        transfers.addAll(activated);
+                    Iterable<ShortMutationId> ids = sync.plan.ids(logId);
+                    for (ShortMutationId id : ids)
+                    {
+                        boolean isMutation = MutationJournal.instance.readIfExists(id, mutations);
+                        if (!isMutation)
+                        {
+                            // The current node knows the PlanID for the given TransferID, since it's already been activated
+                            TransferActivation transfer = MutationTrackingService.instance.getTransfer(id);
+                            transfers.add(transfer);
+                        }
+                    }
                 }
-
-                List<Mutation> mutations = new ArrayList<>(mutationIds.idCount());
-                MutationJournal.instance.readAll(mutationIds, mutations);
 
                 Preconditions.checkArgument(sync.plan.idCount() == (mutations.size() + transfers.size()));
 

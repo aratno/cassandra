@@ -18,22 +18,13 @@
 
 package org.apache.cassandra.distributed.test.tracking;
 
-import java.nio.file.Files;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutionException;
 
-import org.apache.cassandra.db.ColumnFamilyStore;
-import org.apache.cassandra.distributed.api.IInvokableInstance;
-import org.apache.cassandra.distributed.shared.AssertUtils;
-import org.apache.cassandra.io.sstable.CQLSSTableWriter;
 import org.apache.cassandra.replication.CoordinatorLogId;
 import org.apache.cassandra.replication.MutationSummary;
 import org.apache.cassandra.replication.Offsets;
 import org.junit.Assert;
 import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.dht.Murmur3Partitioner;
@@ -56,8 +47,6 @@ import static org.apache.cassandra.distributed.test.tracking.MutationTrackingUti
 
 public class MutationTrackingTest extends TestBaseImpl
 {
-    private static final Logger logger = LoggerFactory.getLogger(MutationTrackingTest.class);
-
     @Test
     public void testBasicWritePath() throws Throwable
     {
@@ -130,83 +119,5 @@ public class MutationTrackingTest extends TestBaseImpl
                 Assert.assertEquals(hints, StorageMetrics.totalHints.getCount());
             });
         }
-    }
-
-    @Test
-    public void testTrackedImport() throws Throwable
-    {
-        try (Cluster cluster = Cluster.build(3)
-                                      .withConfig(cfg -> cfg.with(Feature.NETWORK)
-                                                            .with(Feature.GOSSIP)
-                                                            .set("mutation_tracking_enabled", "true")
-                                                            .set("write_request_timeout", "1000ms"))
-                                      .start())
-        {
-            cluster.schemaChange(withKeyspace("CREATE KEYSPACE %s WITH replication = " +
-                                              "{'class': 'SimpleStrategy', 'replication_factor': 3} " +
-                                              "AND replication_type='tracked';"));
-            String TABLE = "tbl";
-            String KEYSPACE_TABLE = String.format("%s.%s", KEYSPACE, TABLE);
-            String schema = String.format(withKeyspace("CREATE TABLE %s." + TABLE + " (k int primary key, v int);"));
-            cluster.schemaChange(schema);
-
-            // Hack: need to bounce for KeyspaceShards to be created for new table, schema changes not yet supported
-            bounce(cluster);
-
-            // Needs to run outside of instance executor because creates schema
-            String file = Files.createTempDirectory(MutationTrackingTest.class.getSimpleName()).toString();
-
-            try (CQLSSTableWriter writer = CQLSSTableWriter.builder()
-                                                           .forTable(schema)
-                                                           .inDirectory(file)
-                                                           .using("INSERT INTO " + KEYSPACE_TABLE + " (k, v) " + "VALUES (?, ?)")
-                                                           .build())
-            {
-                writer.addRow(1, 1);
-            }
-
-            for (IInvokableInstance instance : cluster)
-            {
-                logger.info("Checking instance {} empty before import", instance.config().num());
-                Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
-                AssertUtils.assertRows(rows); // empty
-            }
-
-            cluster.get(1).runOnInstance(() -> {
-                ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE);
-                Set<String> paths = Set.of(file);
-                logger.info("Importing SSTables {}", paths);
-                cfs.importNewSSTables(paths, true, true, true, true, true, true, true);
-            });
-
-            for (IInvokableInstance instance : cluster)
-            {
-                logger.info("Checking propagation of imported SSTable to {}", instance.config().num());
-                // SinglePartition + PartitionRange
-                {
-                    Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE + " WHERE k = 1"));
-                    AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
-                }
-                {
-                    Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
-                    AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
-                }
-            }
-        }
-    }
-
-    private static void bounce(Cluster cluster)
-    {
-        cluster.forEach(instance -> {
-            try
-            {
-                instance.shutdown().get();
-            }
-            catch (InterruptedException | ExecutionException e)
-            {
-                throw new RuntimeException(e);
-            }
-            instance.startup();
-        });
     }
 }

@@ -40,6 +40,7 @@ import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.NoPayload;
+import org.apache.cassandra.net.RequestCallback;
 import org.apache.cassandra.net.RequestCallbackWithFailure;
 import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.streaming.OutgoingStream;
@@ -52,6 +53,7 @@ import org.apache.cassandra.tcm.membership.NodeId;
 import org.apache.cassandra.utils.TimeUUID;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
+import org.apache.cassandra.utils.concurrent.ImmediateFuture;
 
 /**
  * A transfer for a single replica set.
@@ -140,12 +142,34 @@ public class CoordinatedTransfer
         return true;
     }
 
-    public Future<Void> activate()
+    public Future<?> activate()
     {
         // First phase is dryRun to ensure data is present on disk, then second phase does the actual import. This
         // ensures that if something goes wrong (like a topology change during import), we don't have divergence.
+        // TODO: Refactor horrible control flow here, don't need activate helper
         return activate(new TransferActivation(this, true))
-               .andThenAsync(prepared -> activate(new TransferActivation(this, false)));
+               .andThenAsync(prepared -> {
+                   TransferActivation activation = new TransferActivation(this, false);
+                   Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
+                   // Acknowledgement of activation is equivalent to a remote write acknowledgement - the imported
+                   // SSTables are now part of the live set, visible to reads.
+                   // Run this for each replica's response, not after barrier of all responding.
+                   RequestCallback<Void> cb = new RequestCallback<Void>()
+                   {
+                       @Override
+                       public void onResponse(Message<Void> msg)
+                       {
+                           MutationTrackingService.instance.receivedActivationAck(transferId, msg.from());
+                       }
+                   };
+
+                   for (InetAddressAndPort participant : participants)
+                   {
+                       logger.debug("Sending {} to peer {}", activation, participant);
+                       MessagingService.instance().sendWithCallback(msg, participant, cb);
+                   }
+                   return ImmediateFuture.success(null);
+               });
     }
 
     private ActivationCallback activate(TransferActivation activation)
@@ -163,7 +187,6 @@ public class CoordinatedTransfer
 
     private class ActivationCallback extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
     {
-        // TODO: Improve
         final ConcurrentMap<InetAddressAndPort, InetAddressAndPort> acks;
 
         public ActivationCallback()

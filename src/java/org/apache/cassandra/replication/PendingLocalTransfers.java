@@ -18,9 +18,6 @@
 
 package org.apache.cassandra.replication;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -95,30 +92,34 @@ class PendingLocalTransfers
     {
         logger.debug("getPending: {}", planId);
         Entry entry = transfers.get(planId);
-        // TEMPORARY: Need to fix bug causing empty streams
-        // See comment in PendingLocalTransfers.markActivating
-        if (entry == null)
-            return null;
-        Preconditions.checkNotNull(entry);
-        Preconditions.checkState(entry.state == State.PENDING);
-        Preconditions.checkState(entry.transferId == null);
+        // Preconditions.checkNotNull(entry);
+        // Preconditions.checkState(entry.state == State.PENDING);
+        // Preconditions.checkState(entry.transferId == null);
         return entry.transfer;
     }
 
-    // TODO: Build indexed view for access, don't scan
-    Collection<TransferActivation> getActivated(long logId, boolean dryRun)
+    PendingLocalTransfer getActivated(TimeUUID planId)
     {
-        logger.debug("getActivated: {}", logId);
-        List<TransferActivation> activated = new ArrayList<>();
+        logger.debug("getActivated: {}", planId);
+        Entry entry = transfers.get(planId);
+        Preconditions.checkNotNull(entry);
+        Preconditions.checkState(entry.state == State.ACTIVATED);
+        Preconditions.checkNotNull(entry.transferId);
+        return entry.transfer;
+    }
+
+    TransferActivation getTransfer(ShortMutationId transferId)
+    {
+        logger.debug("getTransferIfExists: {}", transferId);
+
+        // TODO: Reverse-index instead of scan
         for (Entry entry : transfers.values())
         {
-            if (entry.state == State.ACTIVATED
-                && entry.transferId != null && entry.transferId.logId() == logId)
+            if (entry.state == State.ACTIVATED && entry.transferId != null && entry.transferId.equals(transferId))
             {
-                activated.add(new TransferActivation(entry.transfer.planId, entry.transferId, dryRun));
+                return new TransferActivation(entry.transfer.planId, entry.transferId, false);
             }
         }
-
-        return activated;
+        throw new RuntimeException("Could not find transfer " + transferId);
     }
 }
