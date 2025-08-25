@@ -70,7 +70,19 @@ public class BulkTransfersTest extends TestBaseImpl
                 // Sleep for a while to make sure import completes
                 Uninterruptibles.sleepUninterruptibly(3, TimeUnit.SECONDS);
 
-                Hooks.super.afterImport(cluster);
+                for (IInvokableInstance instance : cluster)
+                {
+                    logger.info("Checking propagation of imported SSTable to {}", instance.config().num());
+                    // SinglePartition + PartitionRange
+                    {
+                        Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE + " WHERE k = 1"));
+                        AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                    }
+                    {
+                        Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
+                        AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                    }
+                }
             }
         };
         testTrackedImport(hooks);
@@ -83,16 +95,7 @@ public class BulkTransfersTest extends TestBaseImpl
             @Override
             public IInstanceInitializer getInstanceInitializer()
             {
-                return (ClassLoader cl, ThreadGroup tg, int num, int generation) -> {
-                    if (num == 2)
-                    {
-                        new ByteBuddy().rebase(TransferActivation.VerbHandler.class)
-                                       .method(named("doVerb"))
-                                       .intercept(MethodDelegation.to(ByteBuddyInjections.SkipActivation.class))
-                                       .make()
-                                       .load(cl, ClassLoadingStrategy.Default.INJECTION);
-                    }
-                };
+                return ByteBuddyInjections.SkipActivation.install(2);
             }
 
             @Override
@@ -123,10 +126,22 @@ public class BulkTransfersTest extends TestBaseImpl
 
     public static class ByteBuddyInjections
     {
-        // Should fail read validation on node2
         // Only skips direct transfer activation, not activation as part of read reconciliation
         public static class SkipActivation
         {
+            public static IInstanceInitializer install(int...nodes)
+            {
+                return (ClassLoader cl, ThreadGroup tg, int num, int generation) -> {
+                    for (int node : nodes)
+                        if (node == num)
+                            new ByteBuddy().rebase(TransferActivation.VerbHandler.class)
+                                           .method(named("doVerb"))
+                                           .intercept(MethodDelegation.to(ByteBuddyInjections.SkipActivation.class))
+                                           .make()
+                                           .load(cl, ClassLoadingStrategy.Default.INJECTION);
+                };
+            }
+
             @SuppressWarnings("unused")
             public static void doVerb(Message<TransferActivation> msg, @SuperCall Callable<?> zuper)
             {
@@ -155,26 +170,25 @@ public class BulkTransfersTest extends TestBaseImpl
             @Override
             public IInstanceInitializer getInstanceInitializer()
             {
-                return (ClassLoader cl, ThreadGroup tg, int num, int generation) -> {
-                    new ByteBuddy().rebase(TransferActivation.VerbHandler.class)
-                                   .method(named("doVerb"))
-                                   .intercept(MethodDelegation.to(ByteBuddyInjections.SkipActivation.class))
-                                   .make()
-                                   .load(cl, ClassLoadingStrategy.Default.INJECTION);
-                };
+                // No activation, transfer stays pending everywhere
+                return ByteBuddyInjections.SkipActivation.install(1, 2, 3);
             }
 
             @Override
             public void afterImport(Cluster cluster)
             {
-                // Sleep for a while to make sure import completes
-                Uninterruptibles.sleepUninterruptibly(3, TimeUnit.SECONDS);
+                String cql = "SELECT * FROM %s." + TABLE + " WHERE k = 1";
+                Object[][] EMPTY = new Object[0][0];
+
+                for (IInvokableInstance instance : cluster)
+                {
+                    Object[][] rows = instance.coordinator().execute(withKeyspace(cql), ConsistencyLevel.ALL);
+                    AssertUtils.assertRows(rows, EMPTY);
+                }
 
                 // When an import fails, bounce must not move the pending SSTables into the live set
                 bounce(cluster);
 
-                String cql = "SELECT * FROM %s." + TABLE + " WHERE k = 1";
-                Object[][] EMPTY = new Object[0][0];
                 for (IInvokableInstance instance : cluster)
                 {
                     Object[][] rows = instance.coordinator().execute(withKeyspace(cql), ConsistencyLevel.ALL);
@@ -192,22 +206,7 @@ public class BulkTransfersTest extends TestBaseImpl
             return (classLoader, threadGroup, num, generation) -> {};
         }
 
-        default void afterImport(Cluster cluster)
-        {
-            for (IInvokableInstance instance : cluster)
-            {
-                logger.info("Checking propagation of imported SSTable to {}", instance.config().num());
-                // SinglePartition + PartitionRange
-                {
-                    Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE + " WHERE k = 1"));
-                    AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
-                }
-                {
-                    Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
-                    AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
-                }
-            }
-        }
+        void afterImport(Cluster cluster);
     }
 
     private void testTrackedImport(Hooks hooks) throws Throwable

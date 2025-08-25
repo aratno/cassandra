@@ -44,6 +44,7 @@ import org.apache.cassandra.streaming.ProgressInfo;
 import org.apache.cassandra.streaming.StreamReceiver;
 import org.apache.cassandra.streaming.StreamSession;
 import org.apache.cassandra.streaming.messages.StreamMessageHeader;
+import org.apache.cassandra.utils.FBUtilities;
 
 import static java.lang.String.format;
 import static org.apache.cassandra.utils.FBUtilities.prettyPrintMemory;
@@ -155,9 +156,15 @@ public class CassandraEntireSSTableStreamReader implements IStreamReader
 
     private File getDataDir(ColumnFamilyStore cfs, long totalSize) throws IOException
     {
-        Directories.DataDirectory localDir = cfs.getDirectories().getWriteableLocation(totalSize);
+        boolean isTracked = cfs.metadata().replicationType().isTracked();
+
+        Directories.DataDirectory localDir = isTracked
+                                             ? cfs.getDirectories().getPendingDirectory(totalSize)
+                                             : cfs.getDirectories().getWriteableLocation(totalSize);
         if (localDir == null)
-            throw new IOException(format("Insufficient disk space to store %s", prettyPrintMemory(totalSize)));
+            throw new IOException(String.format("Insufficient disk space to store %s", FBUtilities.prettyPrintMemory(totalSize)));
+        if (isTracked)
+            return localDir.location;
 
         File dir = cfs.getDirectories().getLocationForDisk(cfs.getDiskBoundaries().getCorrectDiskForKey(header.firstKey));
 
