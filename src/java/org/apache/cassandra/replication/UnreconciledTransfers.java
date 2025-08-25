@@ -47,10 +47,10 @@ public class UnreconciledTransfers
         offsets.add(offset);
     }
 
-    public void remove(int offset)
+    public boolean remove(int offset)
     {
         logger.trace("Removing {}", offset);
-        offsets.remove(offset);
+        return offsets.remove(offset);
     }
 
     void collect(Token token, TableId tableId, Offsets.OffsetReciever into)

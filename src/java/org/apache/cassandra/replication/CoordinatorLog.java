@@ -149,8 +149,8 @@ public abstract class CoordinatorLog
                     {
                         reconciledOffsets.add(offset);
                         // A given offset is either a mutation or a transfer
-                        unreconciledMutations().remove(offset);
-                        unreconciledTransfers.remove(offset);
+                        if (!unreconciledTransfers.remove(offset))
+                            unreconciledMutations().remove(offset);
                     }
                 }
             });

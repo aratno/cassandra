@@ -148,27 +148,32 @@ public class CoordinatedTransfer
         // ensures that if something goes wrong (like a topology change during import), we don't have divergence.
         // TODO: Refactor horrible control flow here, don't need activate helper
         return activate(new TransferActivation(this, true))
-               .andThenAsync(prepared -> {
-                   TransferActivation activation = new TransferActivation(this, false);
-                   Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-                   // Acknowledgement of activation is equivalent to a remote write acknowledgement - the imported
-                   // SSTables are now part of the live set, visible to reads.
-                   // Run this for each replica's response, not after barrier of all responding.
-                   RequestCallback<Void> cb = new RequestCallback<Void>()
-                   {
-                       @Override
-                       public void onResponse(Message<Void> msg)
-                       {
-                           MutationTrackingService.instance.receivedActivationAck(transferId, msg.from());
-                       }
-                   };
+                .andThenAsync(prepared -> {
+                    TransferActivation activation = new TransferActivation(this, false);
+                    Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
+                    // Acknowledgement of activation is equivalent to a remote write acknowledgement - the imported
+                    // SSTables are now part of the live set, visible to reads.
+                    // Run this for each replica's response, not after barrier of all responding.
+                    RequestCallback<Void> cb = new RequestCallback<Void>()
+                    {
+                        @Override
+                        public void onResponse(Message<Void> msg)
+                        {
+                            MutationTrackingService.instance.receivedActivationAck(transferId, msg.from());
+                        }
+                    };
 
-                   for (InetAddressAndPort participant : participants)
-                   {
-                       logger.debug("Sending {} to peer {}", activation, participant);
-                       MessagingService.instance().sendWithCallback(msg, participant, cb);
-                   }
-                   return ImmediateFuture.success(null);
+                    for (InetAddressAndPort participant : participants)
+                    {
+                        logger.debug("Sending {} to peer {}", activation, participant);
+                        MessagingService.instance().sendWithCallback(msg, participant, cb);
+                    }
+
+                    /*
+                    When should this method return? We don't want to wait until all replicas have acknowledged the
+                    import, because import should tolerate nodes down.
+                    */
+                    return ImmediateFuture.success(null);
                });
     }
 

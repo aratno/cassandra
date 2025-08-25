@@ -22,6 +22,7 @@ import java.nio.file.Files;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.Test;
 
@@ -41,6 +42,7 @@ import org.apache.cassandra.distributed.api.Feature;
 import org.apache.cassandra.distributed.api.IInstanceInitializer;
 import org.apache.cassandra.distributed.api.IInvokableInstance;
 import org.apache.cassandra.distributed.shared.AssertUtils;
+import org.apache.cassandra.distributed.shared.Uninterruptibles;
 import org.apache.cassandra.distributed.test.TestBaseImpl;
 import org.apache.cassandra.io.sstable.CQLSSTableWriter;
 import org.apache.cassandra.net.Message;
@@ -61,7 +63,16 @@ public class BulkTransfersTest extends TestBaseImpl
     @Test
     public void importHappyPath() throws Throwable
     {
-        Hooks hooks = new Hooks() {};
+        Hooks hooks = new Hooks() {
+            @Override
+            public void afterImport(Cluster cluster)
+            {
+                // Sleep for a while to make sure import completes
+                Uninterruptibles.sleepUninterruptibly(3, TimeUnit.SECONDS);
+
+                Hooks.super.afterImport(cluster);
+            }
+        };
         testTrackedImport(hooks);
     }
 
@@ -97,21 +108,10 @@ public class BulkTransfersTest extends TestBaseImpl
                     });
                 });
 
-                logger.info("CHECKPOINT: read 1");
-
                 // Use coordinated query rather than executeInternal to confirm read reconciliation triggers activation
                 String cql = "SELECT * FROM %s." + TABLE + " WHERE k = 1";
                 Object[][] rows = cluster.get(1).coordinator().execute(withKeyspace(cql), ConsistencyLevel.ALL);
                 AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
-
-                /*
-                At the point of this read, why does node3 need to do read reconciliation?
-                TRACE [node3_MutationStage-1] node3 2025-08-23 00:03:24,298 ReadReconcileReceive.java:99 - Received read reconciliation from /127.0.0.1:7012: ReadReconcileReceive{reconciliationId=Id{1:1755921804275000}, syncId=1, coordinator=/127.0.0.1:7012, mutations=], transfers=[Activate{planId=1d6a73d0-7fd6-11f0-9cfe-c1d0c9f0881f, transferId=MutationId{1, 1, 0, 1755921804}, dryRun=false}]}
-                node3 and node1 should both be in sync, just node 2 should need reconciliation.
-                Test is failing due to node3 trying to add an SSTable that's already live.
-                */
-
-                logger.info("CHECKPOINT: read 2");
 
                 // Confirm instance2 gets activated
                 rows = cluster.get(2).executeInternal(withKeyspace(cql));
@@ -146,6 +146,43 @@ public class BulkTransfersTest extends TestBaseImpl
                 }
             }
         }
+    }
+
+    @Test
+    public void importBounceAfterPending() throws Throwable
+    {
+        Hooks hooks = new Hooks() {
+            @Override
+            public IInstanceInitializer getInstanceInitializer()
+            {
+                return (ClassLoader cl, ThreadGroup tg, int num, int generation) -> {
+                    new ByteBuddy().rebase(TransferActivation.VerbHandler.class)
+                                   .method(named("doVerb"))
+                                   .intercept(MethodDelegation.to(ByteBuddyInjections.SkipActivation.class))
+                                   .make()
+                                   .load(cl, ClassLoadingStrategy.Default.INJECTION);
+                };
+            }
+
+            @Override
+            public void afterImport(Cluster cluster)
+            {
+                // Sleep for a while to make sure import completes
+                Uninterruptibles.sleepUninterruptibly(3, TimeUnit.SECONDS);
+
+                // When an import fails, bounce must not move the pending SSTables into the live set
+                bounce(cluster);
+
+                String cql = "SELECT * FROM %s." + TABLE + " WHERE k = 1";
+                Object[][] EMPTY = new Object[0][0];
+                for (IInvokableInstance instance : cluster)
+                {
+                    Object[][] rows = instance.coordinator().execute(withKeyspace(cql), ConsistencyLevel.ALL);
+                    AssertUtils.assertRows(rows, EMPTY);
+                }
+            }
+        };
+        testTrackedImport(hooks);
     }
 
     private interface Hooks
