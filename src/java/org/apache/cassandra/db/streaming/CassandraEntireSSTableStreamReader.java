@@ -158,13 +158,11 @@ public class CassandraEntireSSTableStreamReader implements IStreamReader
     {
         boolean isTracked = cfs.metadata().replicationType().isTracked();
 
-        Directories.DataDirectory localDir = isTracked
-                                             ? cfs.getDirectories().getPendingDirectory(totalSize)
-                                             : cfs.getDirectories().getWriteableLocation(totalSize);
+        Directories.DataDirectory localDir = cfs.getDirectories().getWriteableLocation(totalSize);
         if (localDir == null)
             throw new IOException(String.format("Insufficient disk space to store %s", FBUtilities.prettyPrintMemory(totalSize)));
         if (isTracked)
-            return localDir.location;
+            return cfs.getDirectories().getPendingLocationForDisk(localDir, session.planId());
 
         File dir = cfs.getDirectories().getLocationForDisk(cfs.getDiskBoundaries().getCorrectDiskForKey(header.firstKey));
 

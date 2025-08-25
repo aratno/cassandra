@@ -82,6 +82,7 @@ public class SSTableImporter
         logger.info("[{}] Loading new SSTables for {}/{}: {}", importID, cfs.getKeyspaceName(), cfs.getTableName(), options);
 
         TableMetadata metadata = cfs.metadata();
+        boolean isTracked = metadata.replicationType().isTracked();
         List<Pair<Directories.SSTableLister, String>> listers = getSSTableListers(options.srcPaths);
 
         Set<Descriptor> currentDescriptors = new HashSet<>();
@@ -180,7 +181,14 @@ public class SSTableImporter
                     Descriptor newDescriptor = cfs.getUniqueDescriptorFor(entry.getKey(), targetDir);
                     maybeMutateMetadata(entry.getKey(), options);
                     movedSSTables.add(new MovedSSTable(newDescriptor, entry.getKey(), entry.getValue()));
-                    SSTableReader sstable = SSTableReader.moveAndOpenSSTable(cfs, entry.getKey(), newDescriptor, entry.getValue(), options.copyData);
+                    SSTableReader sstable;
+                    if (isTracked)
+                        sstable = SSTableReader.open(cfs, oldDescriptor, metadata.ref);
+                    else
+                    {
+                        // Don't move tracked SSTables, since that will move them to the live set on bounce
+                        sstable = SSTableReader.moveAndOpenSSTable(cfs, oldDescriptor, newDescriptor, entry.getValue(), options.copyData);
+                    }
                     newSSTablesPerDirectory.add(sstable);
                 }
                 catch (Throwable t)
@@ -230,7 +238,7 @@ public class SSTableImporter
             if (!cfs.indexManager.validateSSTableAttachedIndexes(newSSTables, false, options.validateIndexChecksum))
                 cfs.indexManager.buildSSTableAttachedIndexesBlocking(newSSTables);
 
-            if (cfs.metadata().replicationType().isTracked())
+            if (isTracked)
                 TrackedBulkTransfer.start(cfs.keyspace.getName(), newSSTables);
             else
                 cfs.getTracker().addSSTables(newSSTables);

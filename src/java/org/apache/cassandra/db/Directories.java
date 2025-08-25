@@ -73,6 +73,7 @@ import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.snapshot.SnapshotManifest;
 import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.Pair;
+import org.apache.cassandra.utils.TimeUUID;
 
 import static org.apache.cassandra.utils.LocalizeString.toLowerCaseLocalized;
 
@@ -728,12 +729,18 @@ public class Directories
         return new File(snapshotDir, "schema.cql");
     }
 
-    public DataDirectory getPendingDirectory(long writeSize)
+    public File getPendingLocationForDisk(DataDirectory dataDirectory, TimeUUID planId)
     {
-        DataDirectory directory = getWriteableLocation(writeSize);
-        File location = getOrCreate(directory.location, PENDING_SUBDIR);
-        logger.debug("Using pending directory {} for file of size {}", location, writeSize);
-        return new DataDirectory(location);
+        for (File dir : dataPaths)
+        {
+            // Note that we must compare absolute paths (not canonical) here since keyspace directories might be symlinks
+            Path dirPath = dir.toAbsolute().toPath();
+            Path locationPath = dataDirectory.location.toAbsolute().toPath();
+            if (!dirPath.startsWith(locationPath))
+                continue;
+            return getOrCreate(dir, PENDING_SUBDIR, planId.toString());
+        }
+        throw new RuntimeException("Could not find pending location");
     }
 
     public static File getBackupsDirectory(Descriptor desc)

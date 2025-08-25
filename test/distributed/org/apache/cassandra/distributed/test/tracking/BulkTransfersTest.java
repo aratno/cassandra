@@ -106,7 +106,6 @@ public class BulkTransfersTest extends TestBaseImpl
                     TableId tableId = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE).metadata().id;
                     MutationSummary summary = MutationTrackingService.instance.createSummaryForKey(key, tableId, false);
                     Assertions.assertThat(summary).satisfies(s -> {
-                        logger.trace("SUMMARY: {}", summary);
                         assert s.size() != 0;
                     });
                 });

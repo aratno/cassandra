@@ -53,6 +53,7 @@ import org.apache.cassandra.io.sstable.format.SSTableFormat;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.io.util.DataInputPlus;
+import org.apache.cassandra.io.util.File;
 import org.apache.cassandra.io.util.TrackedDataInputPlus;
 import org.apache.cassandra.metrics.StorageMetrics;
 import org.apache.cassandra.replication.ImmutableCoordinatorLogOffsets;
@@ -182,9 +183,7 @@ public class CassandraStreamReader implements IStreamReader
     {
         boolean isTracked = cfs.metadata().replicationType().isTracked();
 
-        Directories.DataDirectory localDir = isTracked
-                ? cfs.getDirectories().getPendingDirectory(totalSize)
-                : cfs.getDirectories().getWriteableLocation(totalSize);
+        Directories.DataDirectory localDir = cfs.getDirectories().getWriteableLocation(totalSize);
         if (localDir == null)
             throw new IOException(String.format("Insufficient disk space to store %s", FBUtilities.prettyPrintMemory(totalSize)));
 
@@ -195,7 +194,8 @@ public class CassandraStreamReader implements IStreamReader
 
         if (isTracked)
         {
-            Descriptor desc = cfs.newSSTableDescriptor(localDir.location, format);
+            File location = cfs.getDirectories().getPendingLocationForDisk(localDir, session.planId());
+            Descriptor desc = cfs.newSSTableDescriptor(location, format);
             return SimpleSSTableMultiWriter.create(desc, estimatedKeys, ActiveRepairService.UNREPAIRED_SSTABLE, ActiveRepairService.NO_PENDING_REPAIR, false,
                                                    coordinatorLogOffsets, cfs.metadata, null, sstableLevel, getHeader(cfs.metadata()),
                                                    cfs.indexManager.listIndexGroups(), lifecycleNewTracker, cfs);
