@@ -263,7 +263,7 @@ public class CassandraStreamReceiver implements StreamReceiver
                 {
                     // Don't mark as live until activated by the stream coordinator
                     PendingLocalTransfer transfer = new PendingLocalTransfer(cfs.metadata().id, session.planId(), sstables);
-                    MutationTrackingService.instance.savePendingTransfer(transfer);
+                    MutationTrackingService.instance.received(transfer);
                     return;
                 }
 

@@ -38,6 +38,7 @@ import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
+import org.apache.cassandra.replication.CoordinatedTransfer;
 import org.apache.cassandra.replication.Log2OffsetsMap;
 import org.apache.cassandra.replication.MutationJournal;
 import org.apache.cassandra.replication.MutationTrackingService;
@@ -134,7 +135,7 @@ public class ReadReconcileSend
                 // TODO (expected): do not deser just to serialize again, if same messaging versions (common case)
                 // TODO (expected): don't materialize mutation ids, look up from offset collections
                 List<Mutation> mutations = new ArrayList<>(sync.plan.idCount());
-                List<TransferActivation> transfers = new ArrayList<>();
+                List<TransferActivation> activations = new ArrayList<>();
                 LongIterator logIds = sync.plan.logIds();
                 while (logIds.hasNext())
                 {
@@ -145,16 +146,17 @@ public class ReadReconcileSend
                         boolean isMutation = MutationJournal.instance.readIfExists(id, mutations);
                         if (!isMutation)
                         {
-                            // The current node knows the PlanID for the given activationId, since it's already been activated
-                            TransferActivation transfer = MutationTrackingService.instance.getTransfer(id);
-                            transfers.add(transfer);
+                            // The current node knows the PlanID for the given activationId. If it was present in a
+                            // summary, it's already been activated.
+                            CoordinatedTransfer transfer = MutationTrackingService.instance.getActivatedTransfer(id);
+                            activations.add(new TransferActivation(transfer, sync.to));
                         }
                     }
                 }
 
-                Preconditions.checkArgument(sync.plan.idCount() == (mutations.size() + transfers.size()));
+                Preconditions.checkArgument(sync.plan.idCount() == (mutations.size() + activations.size()));
 
-                ReadReconcileReceive receive = new ReadReconcileReceive(payload.reconcileId, sync.syncId, message.from(), mutations, transfers);
+                ReadReconcileReceive receive = new ReadReconcileReceive(payload.reconcileId, sync.syncId, message.from(), mutations, activations);
                 logger.trace("Sending {} to replica {}", receive, sync.to);
                 MessagingService.instance().send(Message.out(Verb.READ_RECONCILE_RCV, receive), sync.to);
             }

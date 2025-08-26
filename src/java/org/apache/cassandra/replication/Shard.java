@@ -88,10 +88,10 @@ public class Shard
         getOrCreate(mutationId).receivedWriteResponse(mutationId, onHostId);
     }
 
-    void receivedActivationAck(TransferActivation transfer, InetAddressAndPort onHost)
+    void receivedActivationAck(MutationId activationId, InetAddressAndPort onHost)
     {
         int onHostId = ClusterMetadata.current().directory.peerId(onHost).id();
-        getOrCreate(transfer.activationId).receivedActivationAck(transfer.activationId, onHostId);
+        getOrCreate(activationId).receivedActivationAck(activationId, onHostId);
     }
 
     void updateReplicatedOffsets(List<? extends Offsets> offsets, InetAddressAndPort onHost)

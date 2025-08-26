@@ -47,6 +47,11 @@ public class PendingLocalTransfer
 {
     private static final Logger logger = LoggerFactory.getLogger(PendingLocalTransfer.class);
 
+    private String logPrefix()
+    {
+        return String.format("[PendingLocalTransfer #%s]", planId);
+    }
+
     final TimeUUID planId;
     final TableId tableId;
     final Collection<SSTableReader> sstables;
@@ -106,12 +111,12 @@ public class PendingLocalTransfer
      */
     public void activate(TransferActivation activation)
     {
-        logger.info("Activating transfer {}, {} ms since pending", this, currentTimeMillis() - createdAt);
+        logger.info("{} Activating transfer {}, {} ms since pending", logPrefix(), this, currentTimeMillis() - createdAt);
         ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(tableId);
         Preconditions.checkNotNull(cfs);
         Preconditions.checkState(!sstables.isEmpty());
 
-        // Ensure no lingering mutation IDs, only transfer IDs
+        // Ensure no lingering mutation IDs, only activation IDs
         for (SSTableReader sstable : sstables)
         {
             Preconditions.checkState(sstable.getCoordinatorLogOffsets().isEmpty());
@@ -131,7 +136,7 @@ public class PendingLocalTransfer
         }
         if (activation.dryRun)
         {
-            logger.info("Not adding SSTables to live set for dryRun {}", activation);
+            logger.info("{} Not adding SSTables to live set for dryRun {}", logPrefix(), activation);
             return;
         }
         cfs.getTracker().addSSTablesTracked(sstables);

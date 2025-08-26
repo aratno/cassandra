@@ -18,10 +18,11 @@
 
 package org.apache.cassandra.replication;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
@@ -66,40 +67,61 @@ public class CoordinatedTransfer
 {
     private static final Logger logger = LoggerFactory.getLogger(CoordinatedTransfer.class);
 
+    private String logPrefix()
+    {
+        return String.format("[CoordinatedTransfer #%s]", transferId);
+    }
+
+    final TimeUUID transferId = TimeUUID.Generator.nextTimeUUID();
+
     // TODO(expected): Add epoch at time of creation
+    final String keyspace;
     public final Range<Token> range;
-    public final Collection<InetAddressAndPort> participants;
+
+    // Map peer to streaming planId, null if no successful stream completed
+    final Map<InetAddressAndPort, TimeUUID> streams;
+
     private final Collection<SSTableReader> sstables;
 
-    public volatile TimeUUID planId = null;
+    // Assigned
     public volatile MutationId activationId = MutationId.none();
 
-    CoordinatedTransfer(Range<Token> range, Participants participants, Collection<SSTableReader> sstables)
+    CoordinatedTransfer(String keyspace, Range<Token> range, Participants participants, Collection<SSTableReader> sstables)
     {
+        this.keyspace = keyspace;
         this.range = range;
         this.sstables = sstables;
         
-        // TODO: Improve
         ClusterMetadata cm = ClusterMetadata.current();
-        this.participants = new ArrayList<>(participants.size());
+        this.streams = new HashMap<>(participants.size());
         for (int i = 0; i < participants.size(); i++)
         {
             InetAddressAndPort addr = cm.directory.getNodeAddresses(new NodeId(participants.get(i))).broadcastAddress;
-            this.participants.add(addr);
+            this.streams.put(addr, null);
         }
     }
 
     public void setActivationId(MutationId activationId)
     {
         Preconditions.checkState(this.activationId.isNone());
-        logger.debug("Assigning activationId {} for transfer {}", activationId, this);
+        logger.debug("{} Assigning activationId {} for transfer {}", logPrefix(), activationId, this);
         this.activationId = activationId;
     }
 
-    /**
-     * Returns whether any streaming actually happened. If not, there's nothing to activate.
-     */
-    public boolean stream()
+    void stream(LocalTransfers transfers)
+    {
+        transfers.coordinating(this);
+
+        // TODO: parallelize on streaming threads
+        for (InetAddressAndPort peer : streams.keySet())
+            stream(transfers, peer);
+
+        /* TODO
+        If some streams fail, that's OK. It just means we won't move on to activation.
+        */
+    }
+
+    private void stream(LocalTransfers transfers, InetAddressAndPort peer)
     {
         StreamPlan plan = new StreamPlan(StreamOperation.IMPORT);
 
@@ -111,101 +133,97 @@ public class CoordinatedTransfer
             List<Range<Token>> ranges = Collections.singletonList(range);
             List<SSTableReader.PartitionPositionBounds> positions = sstable.getPositionsForRanges(ranges);
             long estimatedKeys = sstable.estimatedKeysForRanges(ranges);
-            for (InetAddressAndPort addr : participants)
-            {
-                OutgoingStream stream = new CassandraOutgoingFile(StreamOperation.IMPORT, sstable.ref(), positions, ranges, estimatedKeys);
-                plan.transferStreams(addr, Collections.singleton(stream));
-            }
+            OutgoingStream stream = new CassandraOutgoingFile(StreamOperation.IMPORT, sstable.ref(), positions, ranges, estimatedKeys);
+            plan.transferStreams(peer, Collections.singleton(stream));
         }
 
-        logger.info("Streaming transfer {}", this);
+        logger.info("{} Starting streaming transfer {} to peer {}", logPrefix(), this, peer);
         StreamResultFuture execute = plan.execute();
         StreamState state;
         try
         {
             state = execute.get();
+            logger.debug("{} Completed streaming transfer {} to peer {}", logPrefix(), this, peer);
         }
         catch (InterruptedException | ExecutionException e)
         {
             throw new RuntimeException(e);
         }
 
-        // Still not exactly sure why this happens. My best guess is that thet SSTable doesn't contain any rows in the
-        // provided range.
-        if (state.sessions.isEmpty())
-            return false;
-
         if (state.hasFailedSession() || state.hasAbortedSession())
             throw new RuntimeException("Stream failed due to failed or aborted sessions: " + state.sessions());
 
-        this.planId = plan.planId();
-        return true;
+        transfers.streamed(this, peer, plan.planId(), state);
     }
 
-    public Future<?> activate()
+    Future<?> activate(LocalTransfers transfers, MutationId activationId)
     {
+        transfers.activating(this, activationId);
+
         // First phase is dryRun to ensure data is present on disk, then second phase does the actual import. This
         // ensures that if something goes wrong (like a topology change during import), we don't have divergence.
-        // TODO: Refactor horrible control flow here, don't need activate helper
-        return activate(new TransferActivation(this, true))
-                .andThenAsync(prepared -> {
-                    TransferActivation activation = new TransferActivation(this, false);
-                    Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-                    // Acknowledgement of activation is equivalent to a remote write acknowledgement - the imported
-                    // SSTables are now part of the live set, visible to reads.
-                    // Run this for each replica's response, not after barrier of all responding.
-                    RequestCallback<Void> cb = new RequestCallback<Void>()
-                    {
-                        @Override
-                        public void onResponse(Message<Void> msg)
-                        {
-                            MutationTrackingService.instance.receivedActivationAck(activationId, msg.from());
-                        }
-                    };
-
-                    for (InetAddressAndPort participant : participants)
-                    {
-                        logger.debug("Sending {} to peer {}", activation, participant);
-                        MessagingService.instance().sendWithCallback(msg, participant, cb);
-                    }
-
-                    /*
-                    When should this method return? We don't want to wait until all replicas have acknowledged the
-                    import, because import should tolerate nodes down.
-                    */
-                    return ImmediateFuture.success(null);
-               });
-    }
-
-    private ActivationCallback activate(TransferActivation activation)
-    {
-        Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-        ActivationCallback cb = new ActivationCallback();
-
-        for (InetAddressAndPort participant : participants)
+        AllRespond allRespond = new AllRespond(streams.keySet());
+        for (Map.Entry<InetAddressAndPort, TimeUUID> entry : streams.entrySet())
         {
-            logger.debug("Sending {} to peer {}", activation, participant);
-            MessagingService.instance().sendWithCallback(msg, participant, cb);
+            InetAddressAndPort peer = entry.getKey();
+            TransferActivation activation = new TransferActivation(this, peer, true);
+            Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
+            for (InetAddressAndPort participant : streams.keySet())
+            {
+                logger.debug("{} Sending {} to peer {}", logPrefix(), activation, participant);
+                MessagingService.instance().sendWithCallback(msg, participant, allRespond);
+            }
         }
-        return cb;
+        allRespond.awaitUninterruptibly();
+
+        // Acknowledgement of activation is equivalent to a remote write acknowledgement. The imported SSTables are now
+        // part of the live set, visible to reads.
+        for (Map.Entry<InetAddressAndPort, TimeUUID> entry : streams.entrySet())
+        {
+            InetAddressAndPort peer = entry.getKey();
+            TransferActivation activation = new TransferActivation(this, peer, false);
+            Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
+
+            RequestCallback<Void> callback = new RequestCallback<Void>()
+            {
+                @Override
+                public void onResponse(Message<Void> msg)
+                {
+                    MutationTrackingService.instance.receivedActivationAck(CoordinatedTransfer.this, msg.from());
+                }
+            };
+
+            for (InetAddressAndPort participant : streams.keySet())
+            {
+                logger.debug("{} Sending {} to peer {}", logPrefix(), activation, participant);
+                MessagingService.instance().sendWithCallback(msg, participant, callback);
+            }
+        }
+
+        /*
+        When should this method return? We don't want to wait until all replicas have acknowledged the
+        import, because import should tolerate nodes down.
+        */
+        return ImmediateFuture.success(null);
     }
 
-    private class ActivationCallback extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
+    private class AllRespond extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
     {
         final ConcurrentMap<InetAddressAndPort, InetAddressAndPort> acks;
 
-        public ActivationCallback()
+        public AllRespond(Collection<InetAddressAndPort> acks)
         {
-            ConcurrentMap<InetAddressAndPort, InetAddressAndPort> acks = new ConcurrentHashMap<>(CoordinatedTransfer.this.participants.size());
-            for (InetAddressAndPort participant : CoordinatedTransfer.this.participants)
-                acks.put(participant, participant);
-            this.acks = acks;
+            ConcurrentHashMap<InetAddressAndPort, InetAddressAndPort> map = new ConcurrentHashMap<>(acks.size());
+            for (InetAddressAndPort ack : acks)
+                map.put(ack, ack);
+
+            this.acks = map;
         }
 
         @Override
         public void onResponse(Message<NoPayload> msg)
         {
-            logger.debug("Activation success response: {}", msg.from());
+            logger.debug("{} Got response from: {}", logPrefix(), msg.from());
             acks.remove(msg.from());
             if (acks.isEmpty())
                 trySuccess(null);
@@ -214,7 +232,7 @@ public class CoordinatedTransfer
         @Override
         public void onFailure(InetAddressAndPort from, RequestFailureReason failureReason)
         {
-            logger.debug("Activation failure response: {} {}", from, failureReason);
+            logger.debug("{} Got failure {} from {}", logPrefix(), failureReason, from);
             tryFailure(null);
         }
     }
@@ -223,10 +241,10 @@ public class CoordinatedTransfer
     public String toString()
     {
         return "CoordinatedTransfer{" +
-               "range=" + range +
-               ", participants=" + participants +
+               "transferId=" + transferId +
+               ", range=" + range +
+               ", participants=" + streams +
                ", sstables=" + sstables +
-               ", planId=" + planId +
                ", activationId=" + activationId +
                '}';
     }
