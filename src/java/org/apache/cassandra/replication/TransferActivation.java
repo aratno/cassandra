@@ -40,20 +40,20 @@ public class TransferActivation
     private static final Logger logger = LoggerFactory.getLogger(TransferActivation.class);
 
     public final TimeUUID planId;
-    public final MutationId transferId;
+    public final MutationId activationId;
     public final boolean dryRun;
 
     TransferActivation(CoordinatedTransfer transfer, boolean dryRun)
     {
-        this(transfer.planId, transfer.transferId, dryRun);
+        this(transfer.planId, transfer.activationId, dryRun);
     }
 
-    TransferActivation(TimeUUID planId, MutationId transferId, boolean dryRun)
+    TransferActivation(TimeUUID planId, MutationId activationId, boolean dryRun)
     {
-        Preconditions.checkArgument(!transferId.isNone());
+        Preconditions.checkArgument(!activationId.isNone());
         Preconditions.checkNotNull(planId);
         this.planId = planId;
-        this.transferId = transferId;
+        this.activationId = activationId;
         this.dryRun = dryRun;
     }
 
@@ -70,7 +70,7 @@ public class TransferActivation
         public void serialize(TransferActivation activate, DataOutputPlus out, int version) throws IOException
         {
             TimeUUID.Serializer.instance.serialize(activate.planId, out, version);
-            MutationId.serializer.serialize(activate.transferId, out, version);
+            MutationId.serializer.serialize(activate.activationId, out, version);
             out.writeBoolean(activate.dryRun);
         }
 
@@ -78,9 +78,9 @@ public class TransferActivation
         public TransferActivation deserialize(DataInputPlus in, int version) throws IOException
         {
             TimeUUID planId = TimeUUID.Serializer.instance.deserialize(in, version);
-            MutationId transferId = MutationId.serializer.deserialize(in, version);
+            MutationId activationId = MutationId.serializer.deserialize(in, version);
             boolean dryRun = in.readBoolean();
-            return new TransferActivation(planId, transferId, dryRun);
+            return new TransferActivation(planId, activationId, dryRun);
         }
 
         @Override
@@ -88,7 +88,7 @@ public class TransferActivation
         {
             long size = 0;
             size += TimeUUID.Serializer.instance.serializedSize(activate.planId, version);
-            size += MutationId.serializer.serializedSize(activate.transferId, version);
+            size += MutationId.serializer.serializedSize(activate.activationId, version);
             size += TypeSizes.BOOL_SIZE;
             return size;
         }
@@ -111,7 +111,7 @@ public class TransferActivation
     {
         return "Activate{" +
                "planId=" + planId +
-               ", transferId=" + transferId +
+               ", activationId=" + activationId +
                ", dryRun=" + dryRun +
                '}';
     }

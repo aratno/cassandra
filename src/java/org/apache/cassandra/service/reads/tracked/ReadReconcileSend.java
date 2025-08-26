@@ -145,7 +145,7 @@ public class ReadReconcileSend
                         boolean isMutation = MutationJournal.instance.readIfExists(id, mutations);
                         if (!isMutation)
                         {
-                            // The current node knows the PlanID for the given TransferID, since it's already been activated
+                            // The current node knows the PlanID for the given activationId, since it's already been activated
                             TransferActivation transfer = MutationTrackingService.instance.getTransfer(id);
                             transfers.add(transfer);
                         }

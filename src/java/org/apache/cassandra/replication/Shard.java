@@ -23,6 +23,7 @@ import java.util.function.IntSupplier;
 
 import com.google.common.base.Preconditions;
 
+import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.db.ReadExecutionController;
@@ -55,7 +56,7 @@ public class Shard
      *
      * For data reads, transfer IDs shouldn't be included in read summaries via collect, because concurrent reads may
      * have different ViewFragments different transfers present, and we need to ensure the summaries match the data read
-     * from the View. Instead, they'll be included via {@link ReadExecutionController#addTransferIds(ColumnFamilyStore.ViewFragment)}.
+     * from the View. Instead, they'll be included via {@link ReadExecutionController#addActivationIds(ColumnFamilyStore.ViewFragment)}.
      *
      * For summary reads, transfer IDs will still be served for collect via {@link UnreconciledMutationsReplica}.
      */
@@ -90,7 +91,7 @@ public class Shard
     void receivedActivationAck(TransferActivation transfer, InetAddressAndPort onHost)
     {
         int onHostId = ClusterMetadata.current().directory.peerId(onHost).id();
-        getOrCreate(transfer.transferId).receivedActivationAck(transfer.transferId, onHostId);
+        getOrCreate(transfer.activationId).receivedActivationAck(transfer.activationId, onHostId);
     }
 
     void updateReplicatedOffsets(List<? extends Offsets> offsets, InetAddressAndPort onHost)

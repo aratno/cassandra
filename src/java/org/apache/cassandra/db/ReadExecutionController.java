@@ -66,7 +66,7 @@ public class ReadExecutionController implements AutoCloseable
      * These come from the ViewFragment, not the SSTable read path, so bloom filters + short-circuiting SSTable scans
      * will still include the total set of relevant bulk transfers.
      */
-    private Set<ShortMutationId> transferIds = null;
+    private Set<ShortMutationId> activationIds = null;
 
     ReadExecutionController(ReadCommand command,
                             OpOrder.Group baseOp,
@@ -262,19 +262,19 @@ public class ReadExecutionController implements AutoCloseable
             cfs.metric.topLocalReadQueryTime.addSample(cql, timeMicros);
     }
 
-    public void addTransferIds(ColumnFamilyStore.ViewFragment view)
+    public void addActivationIds(ColumnFamilyStore.ViewFragment view)
     {
-        transferIds = new HashSet<>();
+        activationIds = new HashSet<>();
         for (SSTableReader sstable : view.sstables)
         {
             Collection<? extends ShortMutationId> ids = sstable.getCoordinatorLogOffsets().transfers();
             logger.trace("Adding transfer IDs from SSTable {} {}", sstable, ids);
-            transferIds.addAll(ids);
+            activationIds.addAll(ids);
         }
     }
 
-    public Iterator<ShortMutationId> getTransferIds()
+    public Iterator<ShortMutationId> getActivationIds()
     {
-        return transferIds.iterator();
+        return activationIds.iterator();
     }
 }

@@ -45,7 +45,7 @@ class PendingLocalTransfers
     {
         private final PendingLocalTransfer transfer;
         private volatile State state = State.PENDING;
-        private volatile MutationId transferId = null;
+        private volatile MutationId activationId = null;
 
         private Entry(PendingLocalTransfer transfer)
         {
@@ -63,28 +63,28 @@ class PendingLocalTransfers
         Preconditions.checkState(existing == null);
     }
 
-    void markActivating(CoordinatedTransfer transfer, MutationId transferId)
+    void markActivating(CoordinatedTransfer transfer, MutationId activationId)
     {
-        logger.debug("markActivating: {} {}", transfer, transferId);
+        logger.debug("markActivating: {} {}", transfer, activationId);
         Entry entry = transfers.get(transfer.planId);
         // This can fail due to a stream completing immediately, if it has no sessions
         // Then we never reach the registration of the pending transfer in CassandraStreamReceiver
         // Still need to figure out why stream is empty, maybe SSTable has no data for that range?
         // Preconditions.checkNotNull(entry);
         // Preconditions.checkState(entry.state == State.PENDING);
-        // Preconditions.checkState(entry.transferId == null);
+        // Preconditions.checkState(entry.activationId == null);
 
-        transfer.setTransferId(transferId);
+        transfer.setActivationId(activationId);
     }
 
-    public void markActivated(TimeUUID planId, MutationId transferId)
+    public void markActivated(TimeUUID planId, MutationId activationId)
     {
-        logger.debug("markActivated: {} {}", planId, transferId);
+        logger.debug("markActivated: {} {}", planId, activationId);
         Entry entry = transfers.get(planId);
         Preconditions.checkState(entry.state == State.PENDING);
-        Preconditions.checkState(entry.transferId == null);
+        Preconditions.checkState(entry.activationId == null);
 
-        entry.transferId = transferId;
+        entry.activationId = activationId;
         entry.state = State.ACTIVATED;
     }
 
@@ -94,7 +94,7 @@ class PendingLocalTransfers
         Entry entry = transfers.get(planId);
         // Preconditions.checkNotNull(entry);
         // Preconditions.checkState(entry.state == State.PENDING);
-        // Preconditions.checkState(entry.transferId == null);
+        // Preconditions.checkState(entry.activationId == null);
         return entry.transfer;
     }
 
@@ -104,22 +104,22 @@ class PendingLocalTransfers
         Entry entry = transfers.get(planId);
         Preconditions.checkNotNull(entry);
         Preconditions.checkState(entry.state == State.ACTIVATED);
-        Preconditions.checkNotNull(entry.transferId);
+        Preconditions.checkNotNull(entry.activationId);
         return entry.transfer;
     }
 
-    TransferActivation getTransfer(ShortMutationId transferId)
+    TransferActivation getTransfer(ShortMutationId activationId)
     {
-        logger.debug("getTransferIfExists: {}", transferId);
+        logger.debug("getTransferIfExists: {}", activationId);
 
         // TODO: Reverse-index instead of scan
         for (Entry entry : transfers.values())
         {
-            if (entry.state == State.ACTIVATED && entry.transferId != null && entry.transferId.equals(transferId))
+            if (entry.state == State.ACTIVATED && entry.activationId != null && entry.activationId.equals(activationId))
             {
-                return new TransferActivation(entry.transfer.planId, entry.transferId, false);
+                return new TransferActivation(entry.transfer.planId, entry.activationId, false);
             }
         }
-        throw new RuntimeException("Could not find transfer " + transferId);
+        throw new RuntimeException("Could not find transfer " + activationId);
     }
 }

@@ -72,7 +72,7 @@ public class CoordinatedTransfer
     private final Collection<SSTableReader> sstables;
 
     public volatile TimeUUID planId = null;
-    public volatile MutationId transferId = MutationId.none();
+    public volatile MutationId activationId = MutationId.none();
 
     CoordinatedTransfer(Range<Token> range, Participants participants, Collection<SSTableReader> sstables)
     {
@@ -89,11 +89,11 @@ public class CoordinatedTransfer
         }
     }
 
-    public void setTransferId(MutationId transferId)
+    public void setActivationId(MutationId activationId)
     {
-        Preconditions.checkState(this.transferId.isNone());
-        logger.debug("Assigning Transfer ID {} for transfer {}", transferId, this);
-        this.transferId = transferId;
+        Preconditions.checkState(this.activationId.isNone());
+        logger.debug("Assigning activationId {} for transfer {}", activationId, this);
+        this.activationId = activationId;
     }
 
     /**
@@ -159,7 +159,7 @@ public class CoordinatedTransfer
                         @Override
                         public void onResponse(Message<Void> msg)
                         {
-                            MutationTrackingService.instance.receivedActivationAck(transferId, msg.from());
+                            MutationTrackingService.instance.receivedActivationAck(activationId, msg.from());
                         }
                     };
 
@@ -227,7 +227,7 @@ public class CoordinatedTransfer
                ", participants=" + participants +
                ", sstables=" + sstables +
                ", planId=" + planId +
-               ", transferId=" + transferId +
+               ", activationId=" + activationId +
                '}';
     }
 }

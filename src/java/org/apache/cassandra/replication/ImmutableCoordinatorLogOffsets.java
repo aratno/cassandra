@@ -143,11 +143,11 @@ public class ImmutableCoordinatorLogOffsets implements CoordinatorLogOffsets<Off
             return this;
         }
 
-        public Builder addTransfer(MutationId transferId)
+        public Builder addTransfer(MutationId activationId)
         {
-            if (transferId.isNone())
+            if (activationId.isNone())
                 return this;
-            transfers.add(transferId);
+            transfers.add(activationId);
             return this;
         }
 

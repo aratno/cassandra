@@ -130,10 +130,10 @@ public class MutationTrackingService
         getOrCreate(keyspace).receivedWriteResponse(token, mutationId, onHost);
     }
 
-    public void receivedActivationAck(MutationId transferId, InetAddressAndPort onHost)
+    public void receivedActivationAck(MutationId activationId, InetAddressAndPort onHost)
     {
-        Preconditions.checkArgument(!transferId.isNone());
-        TransferActivation transfer = instance.transfers.getTransfer(transferId);
+        Preconditions.checkArgument(!activationId.isNone());
+        TransferActivation transfer = instance.transfers.getTransfer(activationId);
         PendingLocalTransfer pending = instance.transfers.getActivated(transfer.planId);
         getOrCreate(pending.keyspace).receivedActivationAck(pending, transfer, onHost);
     }
@@ -202,14 +202,14 @@ public class MutationTrackingService
 
         if (!activation.dryRun)
         {
-            instance.transfers.markActivated(pending.planId, activation.transferId);
+            instance.transfers.markActivated(pending.planId, activation.activationId);
             shards.get(pending.keyspace).lookUp(pending.range).receivedActivationAck(activation, FBUtilities.getBroadcastAddressAndPort());
         }
     }
 
-    public TransferActivation getTransfer(ShortMutationId transferId)
+    public TransferActivation getTransfer(ShortMutationId activationId)
     {
-        return instance.transfers.getTransfer(transferId);
+        return instance.transfers.getTransfer(activationId);
     }
 
     public MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
@@ -357,10 +357,10 @@ public class MutationTrackingService
         public Future<?> activate(CoordinatedTransfer transfer)
         {
             Preconditions.checkNotNull(transfer.planId);
-            Preconditions.checkState(transfer.transferId.isNone());
+            Preconditions.checkState(transfer.activationId.isNone());
 
-            MutationId transferId = lookUp(transfer.range).nextId();
-            instance.transfers.markActivating(transfer, transferId);
+            MutationId activationId = lookUp(transfer.range).nextId();
+            instance.transfers.markActivating(transfer, activationId);
 
             return transfer.activate();
         }

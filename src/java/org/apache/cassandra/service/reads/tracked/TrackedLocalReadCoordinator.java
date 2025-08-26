@@ -535,7 +535,7 @@ public class TrackedLocalReadCoordinator
             processDelta(read, initialSummary, secondarySummary);
 
             // Include in summary any transfer IDs that were present for the read
-            summary = merge(controller.getTransferIds(), secondarySummary);
+            summary = merge(controller.getActivationIds(), secondarySummary);
         }
         catch (Exception e)
         {
@@ -550,9 +550,9 @@ public class TrackedLocalReadCoordinator
         }
     }
 
-    private static MutationSummary merge(Iterator<ShortMutationId> transferIds, MutationSummary summary)
+    private static MutationSummary merge(Iterator<ShortMutationId> activationIds, MutationSummary summary)
     {
-        if (transferIds == null || !transferIds.hasNext())
+        if (activationIds == null || !activationIds.hasNext())
             return summary;
 
         MutationSummary.Builder builder = new MutationSummary.Builder(summary.tableId());
@@ -566,9 +566,9 @@ public class TrackedLocalReadCoordinator
             coordinatorSummaryBuilder.reconciled.addAll(coordinatorSummary.reconciled);
         }
 
-        while (transferIds.hasNext())
+        while (activationIds.hasNext())
         {
-            ShortMutationId id = transferIds.next();
+            ShortMutationId id = activationIds.next();
             builder.builderForLog(id).unreconciled.add(id.offset());
         }
         return builder.build();

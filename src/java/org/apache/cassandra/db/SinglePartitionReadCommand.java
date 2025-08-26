@@ -709,7 +709,7 @@ public class SinglePartitionReadCommand extends ReadCommand implements SinglePar
         Tracing.trace("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.select(View.select(SSTableSet.LIVE, partitionKey()));
         if (cfs.metadata().replicationType().isTracked())
-            controller.addTransferIds(view);
+            controller.addActivationIds(view);
         view.sstables.sort(SSTableReader.maxTimestampDescending);
         ClusteringIndexFilter filter = clusteringIndexFilter();
         long minTimestamp = Long.MAX_VALUE;
@@ -952,7 +952,7 @@ public class SinglePartitionReadCommand extends ReadCommand implements SinglePar
         Tracing.trace("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.select(View.select(SSTableSet.LIVE, partitionKey()));
         if (cfs.metadata().replicationType().isTracked())
-            controller.addTransferIds(view);
+            controller.addActivationIds(view);
 
         ImmutableBTreePartition result = null;
         SSTableReadMetricsCollector metricsCollector = new SSTableReadMetricsCollector();
