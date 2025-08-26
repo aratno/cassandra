@@ -89,6 +89,49 @@ public class BulkTransfersTest extends TestBaseImpl
     }
 
     @Test
+    public void importReplicaDown() throws Throwable
+    {
+        Hooks hooks = new Hooks() {
+            @Override
+            public void beforeImport(Cluster cluster)
+            {
+                try
+                {
+                    cluster.get(3).shutdown().get();
+                }
+                catch (InterruptedException | ExecutionException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            }
+
+            @Override
+            public void afterImport(Cluster cluster)
+            {
+                cluster.get(3).startup();
+
+                // Sleep for a while to make sure import completes
+                Uninterruptibles.sleepUninterruptibly(3, TimeUnit.SECONDS);
+
+                for (IInvokableInstance instance : cluster)
+                {
+                    logger.info("Checking propagation of imported SSTable to {}", instance.config().num());
+                    // SinglePartition + PartitionRange
+                    {
+                        Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE + " WHERE k = 1"));
+                        AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                    }
+                    {
+                        Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
+                        AssertUtils.assertRows(rows, AssertUtils.row(1, 1));
+                    }
+                }
+            }
+        };
+        testTrackedImport(hooks);
+    }
+
+    @Test
     public void importMissedActivation() throws Throwable
     {
         Hooks hooks = new Hooks() {
@@ -205,6 +248,7 @@ public class BulkTransfersTest extends TestBaseImpl
             return (classLoader, threadGroup, num, generation) -> {};
         }
 
+        default void beforeImport(Cluster cluster) {};
         void afterImport(Cluster cluster);
     }
 
@@ -246,6 +290,8 @@ public class BulkTransfersTest extends TestBaseImpl
                 Object[][] rows = instance.executeInternal(withKeyspace("SELECT * FROM %s." + TABLE));
                 AssertUtils.assertRows(rows); // empty
             }
+
+            hooks.beforeImport(cluster);
 
             cluster.get(1).runOnInstance(() -> {
                 ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE);
