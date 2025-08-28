@@ -116,7 +116,8 @@ public class TransferActivation
     public String toString()
     {
         return "Activate{" +
-               "planId=" + planId +
+               "transferId=" + transferId +
+               ", planId=" + planId +
                ", activationId=" + activationId +
                ", dryRun=" + dryRun +
                '}';

@@ -174,7 +174,7 @@ public class MutationTrackingService
 
     void activateLocal(TransferActivation activation)
     {
-        logger.trace("activateLocal {}", activation);
+        logger.debug("activateLocal {}", activation);
 
         PendingLocalTransfer pending = instance.transfers.getPendingTransfer(activation.planId);
         pending.activate(activation);

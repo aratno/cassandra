@@ -237,35 +237,28 @@ public class CoordinatedTransfer
         {
             TransferActivation activation = new TransferActivation(this, peer, true);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-            for (InetAddressAndPort participant : streams.keySet())
-            {
-                logger.debug("{} Sending {} to peer {}", logPrefix(), activation, participant);
-                MessagingService.instance().sendWithCallback(msg, participant, allRespond);
-            }
+            logger.debug("{} Sending {} to peer {}", logPrefix(), activation, peer);
+            MessagingService.instance().sendWithCallback(msg, peer, allRespond);
         }
         allRespond.awaitUninterruptibly();
 
         // Acknowledgement of activation is equivalent to a remote write acknowledgement. The imported SSTables are now
         // part of the live set, visible to reads.
+        RequestCallback<Void> callback = new RequestCallback<Void>()
+        {
+            @Override
+            public void onResponse(Message<Void> msg)
+            {
+                MutationTrackingService.instance.receivedActivationAck(CoordinatedTransfer.this, msg.from());
+            }
+        };
         for (InetAddressAndPort peer : acks)
         {
             TransferActivation activation = new TransferActivation(this, peer, false);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
 
-            RequestCallback<Void> callback = new RequestCallback<Void>()
-            {
-                @Override
-                public void onResponse(Message<Void> msg)
-                {
-                    MutationTrackingService.instance.receivedActivationAck(CoordinatedTransfer.this, msg.from());
-                }
-            };
-
-            for (InetAddressAndPort participant : streams.keySet())
-            {
-                logger.debug("{} Sending {} to peer {}", logPrefix(), activation, participant);
-                MessagingService.instance().sendWithCallback(msg, participant, callback);
-            }
+            logger.debug("{} Sending {} to peer {}", logPrefix(), activation, peer);
+            MessagingService.instance().sendWithCallback(msg, peer, callback);
         }
 
         /*
