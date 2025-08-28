@@ -72,6 +72,7 @@ import org.apache.cassandra.repair.messages.SyncResponse;
 import org.apache.cassandra.repair.messages.SyncRequest;
 import org.apache.cassandra.repair.messages.ValidationResponse;
 import org.apache.cassandra.repair.messages.ValidationRequest;
+import org.apache.cassandra.replication.CoordinatedTransfer;
 import org.apache.cassandra.replication.ForwardedWrite;
 import org.apache.cassandra.replication.ShardReplicatedOffsets;
 import org.apache.cassandra.replication.TransferActivation;
@@ -262,6 +263,8 @@ public enum Verb
 
     TRACKED_TRANSFER_ACTIVATE_RSP (912, P1, rpcTimeout, MISC, () -> NoPayload.serializer, () -> ResponseVerbHandler.instance),
     TRACKED_TRANSFER_ACTIVATE_REQ (913, P1, rpcTimeout, MISC, () -> TransferActivation.serializer, () -> TransferActivation.verbHandler, TRACKED_TRANSFER_ACTIVATE_RSP),
+    TRACKED_TRANSFER_STREAM_RSP (914, P3, rpcTimeout, MISC, () -> NoPayload.serializer, () -> ResponseVerbHandler.instance),
+    TRACKED_TRANSFER_STREAM_REQ (915, P3, rpcTimeout, MISC, () -> NoPayload.serializer, () -> CoordinatedTransfer.verbHandler, TRACKED_TRANSFER_STREAM_RSP),
 
     INITIATE_DATA_MOVEMENTS_RSP (814, P1, rpcTimeout, MISC, () -> NoPayload.serializer,             () -> ResponseVerbHandler.instance                                  ),
     INITIATE_DATA_MOVEMENTS_REQ (815, P1, rpcTimeout, MISC, () -> DataMovement.serializer,          () -> DataMovementVerbHandler.instance, INITIATE_DATA_MOVEMENTS_RSP ),

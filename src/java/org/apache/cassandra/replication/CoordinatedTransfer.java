@@ -18,6 +18,7 @@
 
 package org.apache.cassandra.replication;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -44,6 +45,7 @@ import org.apache.cassandra.exceptions.RequestFailureReason;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.apache.cassandra.locator.InetAddressAndPort;
+import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.NoPayload;
@@ -162,7 +164,7 @@ public class CoordinatedTransfer
         return responses >= blockFor;
     }
 
-    private Future<Void> stream(InetAddressAndPort to)
+    Future<Void> stream(InetAddressAndPort to)
     {
         return streamTask(to).andThenAsync(planId -> {
             if (planId == null)
@@ -216,7 +218,6 @@ public class CoordinatedTransfer
             if (state.sessions().isEmpty())
                 return null;
 
-            // TODO: execute streams in parallel
             return plan.planId();
         });
         Stage.ANTI_ENTROPY.submit(task);
@@ -315,5 +316,17 @@ public class CoordinatedTransfer
                ", sstables=" + sstables +
                ", activationId=" + activationId +
                '}';
+    }
+
+    public static final VerbHandler verbHandler = new VerbHandler();
+
+    // move to LocalTransfers?
+    public static class VerbHandler implements IVerbHandler<NoPayload>
+    {
+        @Override
+        public void doVerb(Message<NoPayload> message) throws IOException
+        {
+            MutationTrackingService.instance.streamUnreconciledTransfers(message.from());
+        }
     }
 }

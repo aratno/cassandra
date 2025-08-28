@@ -18,8 +18,11 @@
 
 package org.apache.cassandra.replication;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -27,7 +30,10 @@ import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.utils.TimeUUID;
+import org.apache.cassandra.utils.concurrent.Future;
+import org.apache.cassandra.utils.concurrent.FutureCombiner;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -103,9 +109,18 @@ class LocalTransfers
         return checkNotNull(coordinatingActivated.get(activationId));
     }
 
-    public void fetchUnreconciled()
+    public void streamUnreconciledTransfers(InetAddressAndPort to)
     {
-        logger.info("Fetching unreconciled mutations");
-        // TODO
+        List<Future<Void>> streams = new ArrayList<>();
+        coordinating.forEach((transferId, transfer) -> {
+            Optional<TimeUUID> planId = transfer.streams.get(to);
+            if (planId == null || planId.isPresent())
+                return;
+
+            logger.debug("Found unreconciled stream to {}: {}", transfer, to);
+            streams.add(transfer.stream(to));
+        });
+        // How to handle stream failing?
+        FutureCombiner.successfulOf(streams).awaitUninterruptibly();
     }
 }
