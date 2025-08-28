@@ -56,7 +56,6 @@ import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.service.reads.tracked.TrackedLocalReads;
 import org.apache.cassandra.tcm.ClusterMetadata;
-import org.apache.cassandra.tcm.membership.NodeAddresses;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Interval;
 
@@ -95,7 +94,7 @@ public class MutationTrackingService
             if (keyspace.useMutationTracking())
                 shards.put(keyspace.name, KeyspaceShards.make(keyspace, metadata, this::nextHostLogId));
 
-        fetchUnreconciledTransfers();
+        transfers.fetchUnreconciled();
         broadcaster.start();
 
         started = true;
@@ -165,21 +164,6 @@ public class MutationTrackingService
 
         for (CoordinatedTransfer transfer : transfers)
             transfer.execute(instance.transfers, cl);
-    }
-
-    private void fetchUnreconciledTransfers()
-    {
-        logger.info("Fetching unreconciled mutations");
-        Collection<NodeAddresses> nodes = ClusterMetadata.current().directory.addresses.values();
-        for (NodeAddresses node : nodes)
-        {
-        }
-    }
-
-    void streamUnreconciledTransfers(InetAddressAndPort to)
-    {
-        logger.info("Streaming unreconciled mutations to {}", to);
-        instance.transfers.streamUnreconciledTransfers(to);
     }
 
     public void received(PendingLocalTransfer transfer)
