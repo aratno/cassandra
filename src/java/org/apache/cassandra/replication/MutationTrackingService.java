@@ -37,6 +37,7 @@ import com.google.common.base.Preconditions;
 import org.agrona.collections.IntArrayList;
 import org.apache.cassandra.concurrent.ScheduledExecutorPlus;
 import org.apache.cassandra.concurrent.Shutdownable;
+import org.apache.cassandra.db.ConsistencyLevel;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
@@ -57,8 +58,6 @@ import org.apache.cassandra.service.reads.tracked.TrackedLocalReads;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Interval;
-import org.apache.cassandra.utils.concurrent.Future;
-import org.apache.cassandra.utils.concurrent.FutureCombiner;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -95,6 +94,7 @@ public class MutationTrackingService
             if (keyspace.useMutationTracking())
                 shards.put(keyspace.name, KeyspaceShards.make(keyspace, metadata, this::nextHostLogId));
 
+        transfers.fetchUnreconciled();
         broadcaster.start();
 
         started = true;
@@ -152,9 +152,9 @@ public class MutationTrackingService
         getOrCreate(mutation.getKeyspaceName()).finishWriting(mutation);
     }
 
-    public Future<?> startTransfer(String keyspace, Set<SSTableReader> sstables)
+    public void executeTransfers(String keyspace, Set<SSTableReader> sstables, ConsistencyLevel cl)
     {
-        logger.info("Starting tracked bulk transfer for keyspace {} sstables {}", keyspace, sstables);
+        logger.info("Creating tracked bulk transfers for keyspace {} sstables {}", keyspace, sstables);
 
         KeyspaceShards keyspaceShards = shards.get(keyspace);
         checkNotNull(keyspaceShards);
@@ -162,21 +162,8 @@ public class MutationTrackingService
         CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables);
         logger.info("Split input SSTables into transfers {}", transfers);
 
-        Collection<Future<?>> activations = new ArrayList<>(transfers.size());
         for (CoordinatedTransfer transfer : transfers)
-        {
-            transfer.stream(instance.transfers);
-
-            /* TODO
-            If topology has changed after streaming, need to ensure new topology doesn't break consistency of completed
-            streams.
-            */
-
-            MutationId activationId = keyspaceShards.lookUp(transfer.range).nextId();
-            Future<?> activation = transfer.activate(instance.transfers, activationId);
-            activations.add(activation);
-        }
-        return FutureCombiner.allOf(activations);
+            transfer.execute(instance.transfers, cl);
     }
 
     public void received(PendingLocalTransfer transfer)
@@ -464,7 +451,7 @@ public class MutationTrackingService
                 Range<Token> range = shard.tokenRange;
                 Collection<SSTableReader> sstablesForRange = intervals.search(Interval.create(range.left.minKeyBound(), range.right.maxKeyBound()));
 
-                CoordinatedTransfer transfer = new CoordinatedTransfer(keyspace, range, shard.participants, sstablesForRange);
+                CoordinatedTransfer transfer = new CoordinatedTransfer(keyspace, range, shard.participants, sstablesForRange, shard::nextId);
                 transfers.add(transfer);
 
                 /* REVIEW NOTES

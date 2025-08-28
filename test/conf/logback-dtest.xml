@@ -46,14 +46,14 @@
       <pattern>%-5level [%thread] ${instance_id} %date{ISO8601} %F:%L - %msg%n</pattern>
     </encoder>
     <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-      <level>TRACE</level>
+      <level>DEBUG</level>
     </filter>
   </appender>
 
   <logger name="io.netty.*" level="WARN"/>
   <logger name="org.apache.cassandra.db.Memtable" level="WARN"/>        
 
-  <root level="TRACE">
+  <root level="DEBUG">
     <appender-ref ref="INSTANCEFILE" /> <!-- use blocking to avoid race conditions with appending and searching -->
     <appender-ref ref="INSTANCESTDERR" />
     <appender-ref ref="INSTANCESTDOUT" />

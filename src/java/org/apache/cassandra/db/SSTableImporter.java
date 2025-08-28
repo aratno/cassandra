@@ -239,7 +239,10 @@ public class SSTableImporter
                 cfs.indexManager.buildSSTableAttachedIndexesBlocking(newSSTables);
 
             if (isTracked)
-                TrackedBulkTransfer.start(cfs.keyspace.getName(), newSSTables);
+            {
+                // TODO: Support user-provided CL
+                TrackedBulkTransfer.execute(cfs.keyspace.getName(), newSSTables, ConsistencyLevel.QUORUM);
+            }
             else
                 cfs.getTracker().addSSTables(newSSTables);
 
@@ -264,10 +267,10 @@ public class SSTableImporter
      */
     private static class TrackedBulkTransfer
     {
-        private static void start(String keyspace, Set<SSTableReader> sstables)
+        private static void execute(String keyspace, Set<SSTableReader> sstables, ConsistencyLevel cl)
         {
             // TODO: This isn't cheap - think about what thread it should happen on
-            MutationTrackingService.instance.startTransfer(keyspace, sstables).awaitUninterruptibly();
+            MutationTrackingService.instance.executeTransfers(keyspace, sstables, cl);
         }
     }
 

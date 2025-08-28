@@ -47,7 +47,7 @@ public class TransferActivation
 
     public TransferActivation(CoordinatedTransfer transfer, InetAddressAndPort peer, boolean dryRun)
     {
-        this(transfer.transferId, Preconditions.checkNotNull(transfer.streams.get(peer)), transfer.activationId, dryRun);
+        this(transfer.transferId, transfer.streams.get(peer).orElseThrow(), transfer.activationId, dryRun);
     }
 
     TransferActivation(TimeUUID transferId, TimeUUID planId, MutationId activationId, boolean dryRun)

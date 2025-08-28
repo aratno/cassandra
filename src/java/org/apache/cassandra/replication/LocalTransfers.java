@@ -18,7 +18,6 @@
 
 package org.apache.cassandra.replication;
 
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -28,8 +27,6 @@ import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.locator.InetAddressAndPort;
-import org.apache.cassandra.streaming.StreamState;
 import org.apache.cassandra.utils.TimeUUID;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -49,7 +46,7 @@ class LocalTransfers
     private final Map<ShortMutationId, CoordinatedTransfer> coordinatingActivated = new HashMap<>();
     private final Map<TimeUUID, PendingLocalTransfer> received = new HashMap<>();
 
-    void coordinating(CoordinatedTransfer transfer)
+    void save(CoordinatedTransfer transfer)
     {
         lock.writeLock().lock();
         try
@@ -63,64 +60,20 @@ class LocalTransfers
         }
     }
 
-    void streamed(CoordinatedTransfer transfer, InetAddressAndPort peer, TimeUUID planId, StreamState stream)
+    void activating(CoordinatedTransfer transfer)
     {
         lock.writeLock().lock();
         try
         {
-            Preconditions.checkState(coordinating.containsKey(transfer.transferId));
+            Preconditions.checkState(transfer.activationId == null);
+            transfer.activationId = transfer.getActivationId.get();
 
-            // If the SSTable doesn't contain any rows in the provided range, nothing to activate
-            if (stream.sessions.isEmpty())
-            {
-                logger.debug("Empty stream to peer {}, skipping activation", peer);
-                transfer.streams.remove(peer);
-                return;
-            }
-
-            TimeUUID existingPlan = transfer.streams.put(peer, planId);
-            Preconditions.checkState(existingPlan == null);
-            boolean streamsComplete = streamsComplete(transfer);
-            if (!streamsComplete)
-                return;
-
-            Collection<InetAddressAndPort> activateOn = transfer.streams.keySet();
-            logger.info("Streams complete for {}, ready to activateOn {}", transfer, activateOn);
-            // TODO: Trigger activation
+            coordinatingActivated.put(transfer.activationId, transfer);
         }
         finally
         {
             lock.writeLock().unlock();
         }
-    }
-
-    void activating(CoordinatedTransfer transfer, MutationId activationId)
-    {
-        lock.writeLock().lock();
-        try
-        {
-            Preconditions.checkState(coordinating.containsKey(transfer.transferId));
-            for (TimeUUID planId : transfer.streams.values())
-                checkNotNull(planId);
-
-            coordinatingActivated.put(activationId, transfer);
-            transfer.setActivationId(activationId);
-        }
-        finally
-        {
-            lock.writeLock().unlock();
-        }
-    }
-
-    private static boolean streamsComplete(CoordinatedTransfer transfer)
-    {
-        for (Map.Entry<InetAddressAndPort, TimeUUID> entry : transfer.streams.entrySet())
-        {
-            TimeUUID planId = entry.getValue();
-            if (planId == null)
-                return false;
-        }
-        return true;
     }
 
     void received(PendingLocalTransfer transfer)
@@ -148,5 +101,11 @@ class LocalTransfers
     CoordinatedTransfer getActivatedTransfer(ShortMutationId activationId)
     {
         return checkNotNull(coordinatingActivated.get(activationId));
+    }
+
+    public void fetchUnreconciled()
+    {
+        logger.info("Fetching unreconciled mutations");
+        // TODO
     }
 }

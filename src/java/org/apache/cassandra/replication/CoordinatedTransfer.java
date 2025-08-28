@@ -18,25 +18,31 @@
 
 package org.apache.cassandra.replication;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
 
 import com.google.common.base.Preconditions;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.concurrent.FutureTask;
+import org.apache.cassandra.concurrent.Stage;
+import org.apache.cassandra.db.ConsistencyLevel;
+import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.streaming.CassandraOutgoingFile;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.RequestFailureReason;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
@@ -54,6 +60,7 @@ import org.apache.cassandra.tcm.membership.NodeId;
 import org.apache.cassandra.utils.TimeUUID;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
+import org.apache.cassandra.utils.concurrent.FutureCombiner;
 import org.apache.cassandra.utils.concurrent.ImmediateFuture;
 
 /**
@@ -78,94 +85,156 @@ public class CoordinatedTransfer
     final String keyspace;
     public final Range<Token> range;
 
-    // Map peer to streaming planId, null if no successful stream completed
-    final Map<InetAddressAndPort, TimeUUID> streams;
+    // Map peer to streaming planId if successful stream completed
+    // TODO: move away from optional
+    final ConcurrentMap<InetAddressAndPort, Optional<TimeUUID>> streams;
 
     private final Collection<SSTableReader> sstables;
 
-    // Assigned
-    public volatile MutationId activationId = MutationId.none();
+    final Supplier<MutationId> getActivationId;
+    volatile MutationId activationId = null;
 
-    CoordinatedTransfer(String keyspace, Range<Token> range, Participants participants, Collection<SSTableReader> sstables)
+    CoordinatedTransfer(String keyspace, Range<Token> range, Participants participants, Collection<SSTableReader> sstables, Supplier<MutationId> getActivationId)
     {
         this.keyspace = keyspace;
         this.range = range;
         this.sstables = sstables;
-        
+        this.getActivationId = getActivationId;
+
         ClusterMetadata cm = ClusterMetadata.current();
-        this.streams = new HashMap<>(participants.size());
+        this.streams = new ConcurrentHashMap<>(participants.size());
         for (int i = 0; i < participants.size(); i++)
         {
             InetAddressAndPort addr = cm.directory.getNodeAddresses(new NodeId(participants.get(i))).broadcastAddress;
-            this.streams.put(addr, null);
+            this.streams.put(addr, Optional.empty());
         }
     }
 
-    public void setActivationId(MutationId activationId)
+    void execute(LocalTransfers transfers, ConsistencyLevel cl)
     {
-        Preconditions.checkState(this.activationId.isNone());
-        logger.debug("{} Assigning activationId {} for transfer {}", logPrefix(), activationId, this);
-        this.activationId = activationId;
-    }
+        logger.debug("Executing tracked bulk transfer {}", this);
 
-    void stream(LocalTransfers transfers)
-    {
-        transfers.coordinating(this);
+        transfers.save(this);
 
-        // TODO: parallelize on streaming threads
-        for (InetAddressAndPort peer : streams.keySet())
-            stream(transfers, peer);
+        boolean complete = stream(cl);
+        if (!complete)
+            return;
 
         /* TODO
-        If some streams fail, that's OK. It just means we won't move on to activation.
+        If topology has changed after streaming, need to ensure new topology doesn't break consistency of completed
+        streams.
         */
+        transfers.activating(this);
+        activate();
     }
 
-    private void stream(LocalTransfers transfers, InetAddressAndPort peer)
+    private boolean stream(ConsistencyLevel cl)
     {
-        StreamPlan plan = new StreamPlan(StreamOperation.IMPORT);
+        // TODO: Don't stream multiple copies over the WAN, send one copy and indicate forwarding
+        List<Future<Void>> streaming = new ArrayList<>(streams.size());
+        for (InetAddressAndPort to : streams.keySet())
+            streaming.add(stream(to));
 
-        // No need to flush, only using non-live SSTables already on disk
-        plan.flushBeforeTransfer(false);
-
-        for (SSTableReader sstable : sstables)
-        {
-            List<Range<Token>> ranges = Collections.singletonList(range);
-            List<SSTableReader.PartitionPositionBounds> positions = sstable.getPositionsForRanges(ranges);
-            long estimatedKeys = sstable.estimatedKeysForRanges(ranges);
-            OutgoingStream stream = new CassandraOutgoingFile(StreamOperation.IMPORT, sstable.ref(), positions, ranges, estimatedKeys);
-            plan.transferStreams(peer, Collections.singleton(stream));
-        }
-
-        logger.info("{} Starting streaming transfer {} to peer {}", logPrefix(), this, peer);
-        StreamResultFuture execute = plan.execute();
-        StreamState state;
         try
         {
-            state = execute.get();
-            logger.debug("{} Completed streaming transfer {} to peer {}", logPrefix(), this, peer);
+            FutureCombiner.successfulOf(streaming).get();
         }
         catch (InterruptedException | ExecutionException e)
         {
             throw new RuntimeException(e);
         }
 
-        if (state.hasFailedSession() || state.hasAbortedSession())
-            throw new RuntimeException("Stream failed due to failed or aborted sessions: " + state.sessions());
-
-        transfers.streamed(this, peer, plan.planId(), state);
+        boolean sufficient = sufficient(cl);
+        logger.debug("Sufficient responses to move on to activation? {}", sufficient);
+        return sufficient;
     }
 
-    Future<?> activate(LocalTransfers transfers, MutationId activationId)
+    private boolean sufficient(ConsistencyLevel cl)
     {
-        transfers.activating(this, activationId);
+        AbstractReplicationStrategy ars = Keyspace.open(keyspace).getReplicationStrategy();
+        int blockFor = cl.blockFor(ars);
+        int responses = 0;
+        for (Map.Entry<InetAddressAndPort, Optional<TimeUUID>> entry : streams.entrySet())
+        {
+            if (entry.getValue().isPresent())
+                responses++;
+        }
+        return responses >= blockFor;
+    }
+
+    private Future<Void> stream(InetAddressAndPort to)
+    {
+        return streamTask(to).andThenAsync(planId -> {
+            if (planId == null)
+            {
+                logger.debug("Empty stream to peer {}, skipping activation", to);
+                streams.remove(to);
+            }
+            else
+            {
+                Optional<?> existing = streams.put(to, Optional.of(planId));
+                Preconditions.checkState(existing != null && existing.isEmpty());
+            }
+            return ImmediateFuture.success(null);
+        });
+    }
+
+    private Future<TimeUUID> streamTask(InetAddressAndPort to)
+    {
+        FutureTask<TimeUUID> task = new FutureTask<>(() -> {
+            StreamPlan plan = new StreamPlan(StreamOperation.IMPORT);
+
+            // No need to flush, only using non-live SSTables already on disk
+            plan.flushBeforeTransfer(false);
+
+            for (SSTableReader sstable : sstables)
+            {
+                List<Range<Token>> ranges = Collections.singletonList(range);
+                List<SSTableReader.PartitionPositionBounds> positions = sstable.getPositionsForRanges(ranges);
+                long estimatedKeys = sstable.estimatedKeysForRanges(ranges);
+                OutgoingStream stream = new CassandraOutgoingFile(StreamOperation.IMPORT, sstable.ref(), positions, ranges, estimatedKeys);
+                plan.transferStreams(to, Collections.singleton(stream));
+            }
+
+            logger.info("{} Starting streaming transfer {} to peer {}", logPrefix(), this, to);
+            StreamResultFuture execute = plan.execute();
+            StreamState state;
+            try
+            {
+                state = execute.get();
+                logger.debug("{} Completed streaming transfer {} to peer {}", logPrefix(), this, to);
+            }
+            catch (InterruptedException | ExecutionException e)
+            {
+                throw new RuntimeException(e);
+            }
+
+            if (state.hasFailedSession() || state.hasAbortedSession())
+                throw new RuntimeException("Stream failed due to failed or aborted sessions: " + state.sessions());
+
+            // If the SSTable doesn't contain any rows in the provided range, no streams delivered, nothing to activate
+            if (state.sessions().isEmpty())
+                return null;
+
+            // TODO: execute streams in parallel
+            return plan.planId();
+        });
+        Stage.ANTI_ENTROPY.submit(task);
+        return task;
+    }
+
+    void activate()
+    {
+        Collection<InetAddressAndPort> acks = new ArrayList<>();
+        streams.forEach((peer, planId) -> {
+            if (planId.isPresent()) acks.add(peer);
+        });
 
         // First phase is dryRun to ensure data is present on disk, then second phase does the actual import. This
         // ensures that if something goes wrong (like a topology change during import), we don't have divergence.
-        AllRespond allRespond = new AllRespond(streams.keySet());
-        for (Map.Entry<InetAddressAndPort, TimeUUID> entry : streams.entrySet())
+        AllRespond allRespond = new AllRespond(acks);
+        for (InetAddressAndPort peer : acks)
         {
-            InetAddressAndPort peer = entry.getKey();
             TransferActivation activation = new TransferActivation(this, peer, true);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
             for (InetAddressAndPort participant : streams.keySet())
@@ -178,9 +247,8 @@ public class CoordinatedTransfer
 
         // Acknowledgement of activation is equivalent to a remote write acknowledgement. The imported SSTables are now
         // part of the live set, visible to reads.
-        for (Map.Entry<InetAddressAndPort, TimeUUID> entry : streams.entrySet())
+        for (InetAddressAndPort peer : acks)
         {
-            InetAddressAndPort peer = entry.getKey();
             TransferActivation activation = new TransferActivation(this, peer, false);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
 
@@ -204,7 +272,7 @@ public class CoordinatedTransfer
         When should this method return? We don't want to wait until all replicas have acknowledged the
         import, because import should tolerate nodes down.
         */
-        return ImmediateFuture.success(null);
+        ImmediateFuture.success(null);
     }
 
     private class AllRespond extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
