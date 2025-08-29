@@ -47,7 +47,7 @@ public class TransferActivation
 
     public TransferActivation(CoordinatedTransfer transfer, InetAddressAndPort peer, boolean dryRun)
     {
-        this(transfer.transferId, transfer.streams.get(peer).orElseThrow(), transfer.activationId, dryRun);
+        this(transfer.transferId, transfer.streams.get(peer).planId(), transfer.activationId, dryRun);
     }
 
     TransferActivation(TimeUUID transferId, TimeUUID planId, MutationId activationId, boolean dryRun)
@@ -105,8 +105,10 @@ public class TransferActivation
         @Override
         public void doVerb(Message<TransferActivation> msg) throws IOException
         {
-            msg.payload.apply();
-            MessagingService.instance().respond(NoPayload.noPayload, msg);
+            LocalTransfers.instance().executor.submit(() -> {
+                msg.payload.apply();
+                MessagingService.instance().respond(NoPayload.noPayload, msg);
+            });
         }
     }
 

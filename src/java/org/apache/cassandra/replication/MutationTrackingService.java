@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -39,25 +40,31 @@ import org.apache.cassandra.concurrent.ScheduledExecutorPlus;
 import org.apache.cassandra.concurrent.Shutdownable;
 import org.apache.cassandra.db.ConsistencyLevel;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.db.lifecycle.SSTableIntervalTree;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
+import org.apache.cassandra.exceptions.RequestFailureReason;
 import org.apache.cassandra.gms.FailureDetector;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
+import org.apache.cassandra.net.NoPayload;
+import org.apache.cassandra.net.RequestCallbackWithFailure;
 import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.service.reads.tracked.TrackedLocalReads;
 import org.apache.cassandra.tcm.ClusterMetadata;
+import org.apache.cassandra.tcm.ownership.ReplicaGroups;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Interval;
+import org.apache.cassandra.utils.concurrent.AsyncFuture;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,7 +83,6 @@ public class MutationTrackingService
     private final TrackedLocalReads localReads = new TrackedLocalReads();
     private final ReplicatedOffsetsBroadcaster broadcaster = new ReplicatedOffsetsBroadcaster();
     private final ConcurrentHashMap<String, KeyspaceShards> shards = new ConcurrentHashMap<>();
-    private final LocalTransfers transfers = new LocalTransfers();
 
     private volatile boolean started = false;
 
@@ -94,7 +100,6 @@ public class MutationTrackingService
             if (keyspace.useMutationTracking())
                 shards.put(keyspace.name, KeyspaceShards.make(keyspace, metadata, this::nextHostLogId));
 
-        transfers.fetchUnreconciled();
         broadcaster.start();
 
         started = true;
@@ -159,24 +164,83 @@ public class MutationTrackingService
         KeyspaceShards keyspaceShards = shards.get(keyspace);
         checkNotNull(keyspaceShards);
 
-        CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables);
+        CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspaceShards, sstables, cl);
         logger.info("Split input SSTables into transfers {}", transfers);
 
         for (CoordinatedTransfer transfer : transfers)
-            transfer.execute(instance.transfers, cl);
+            transfer.execute();
+    }
+
+    public void fetchUnreconciledTransfers()
+    {
+        logger.info("Fetching any unreconciled transfers...");
+        for (String keyspace : shards.keySet())
+            fetchUnreconciledTransfers(Keyspace.open(keyspace).getMetadata());
+    }
+
+    private void fetchUnreconciledTransfers(KeyspaceMetadata keyspace)
+    {
+        ReplicaGroups groups = ClusterMetadata.current().placements.get(keyspace.params.replication).writes;
+        InetAddressAndPort self = FBUtilities.getBroadcastAddressAndPort();
+        Message<NoPayload> msg = Message.out(Verb.TRACKED_TRANSFER_STREAM_REQ, NoPayload.noPayload);
+
+        Set<InetAddressAndPort> peers = new HashSet<>();
+
+        groups.forEach((range, forRange) -> {
+            if (!forRange.endpoints().contains(self))
+                return;
+            peers.addAll(forRange.endpoints());
+        });
+        peers.remove(self);
+
+        class OnResponse<V> extends AsyncFuture<Message<V>> implements RequestCallbackWithFailure<V>
+        {
+            @Override
+            public void onResponse(Message<V> msg)
+            {
+                logger.debug("Success {}", msg);
+                trySuccess(msg);
+            }
+
+            @Override
+            public void onFailure(InetAddressAndPort from, RequestFailureReason failureReason)
+            {
+                logger.error("Failure {} from {}", from, failureReason);
+                trySuccess(null);
+            }
+        }
+
+        // TODO: Parallel?
+        for (InetAddressAndPort peer : peers)
+        {
+            // This is likely to time out, especially on initial startup
+            logger.debug("Fetching unreconciled mutations for {} from {}", keyspace.name, peer);
+            OnResponse<Void> response = new OnResponse<>();
+            MessagingService.instance().sendWithCallback(msg, peer, response);
+            response.awaitUninterruptibly();
+            logger.debug("Fetched unreconciled mutations for {} from {}", keyspace.name, peer);
+        }
+    }
+
+    void streamUnreconciledTransfers(InetAddressAndPort to)
+    {
+        logger.info("Streaming unreconciled mutations to {}", to);
+        LocalTransfers.instance().streamUnreconciledTransfers(to);
     }
 
     public void received(PendingLocalTransfer transfer)
     {
         logger.debug("Received pending transfer for tracked table {}", transfer);
-        instance.transfers.received(transfer);
+        LocalTransfers.instance().received(transfer);
     }
 
     void activateLocal(TransferActivation activation)
     {
         logger.debug("activateLocal {}", activation);
 
-        PendingLocalTransfer pending = instance.transfers.getPendingTransfer(activation.planId);
+        // TODO: if already activated, do not activate again
+
+        PendingLocalTransfer pending = LocalTransfers.instance().getPendingTransfer(activation.planId);
         pending.activate(activation);
 
         if (!activation.dryRun)
@@ -187,7 +251,7 @@ public class MutationTrackingService
 
     public CoordinatedTransfer getActivatedTransfer(ShortMutationId activationId)
     {
-        return instance.transfers.getActivatedTransfer(activationId);
+        return LocalTransfers.instance().getActivatedTransfer(activationId);
     }
 
     public MutationSummary createSummaryForKey(DecoratedKey key, TableId tableId, boolean includePending)
@@ -426,7 +490,7 @@ public class MutationTrackingService
             this.transfers = transfers;
         }
 
-        private static CoordinatedTransfers create(KeyspaceShards shards, Collection<SSTableReader> sstables)
+        private static CoordinatedTransfers create(KeyspaceShards shards, Collection<SSTableReader> sstables, ConsistencyLevel cl)
         {
             // Clean up incoming SSTables to remove any existing CoordinatorLogOffsets, can't be trusted
             for (SSTableReader sstable : sstables)
@@ -451,8 +515,9 @@ public class MutationTrackingService
                 Range<Token> range = shard.tokenRange;
                 Collection<SSTableReader> sstablesForRange = intervals.search(Interval.create(range.left.minKeyBound(), range.right.maxKeyBound()));
 
-                CoordinatedTransfer transfer = new CoordinatedTransfer(keyspace, range, shard.participants, sstablesForRange, shard::nextId);
-                transfers.add(transfer);
+                CoordinatedTransfer transfer = new CoordinatedTransfer(keyspace, range, shard.participants, sstablesForRange, cl, shard::nextId);
+                if (!transfer.sstables.isEmpty())
+                    transfers.add(transfer);
 
                 /* REVIEW NOTES
                 Right now for simplicity, streaming from coordinator to itself instead of copying files. This has some
@@ -469,9 +534,12 @@ public class MutationTrackingService
             return transfers.iterator();
         }
 
-        public int size()
+        @Override
+        public String toString()
         {
-            return transfers.size();
+            return "CoordinatedTransfers{" +
+                   "transfers=" + transfers +
+                   '}';
         }
     }
 
@@ -486,7 +554,7 @@ public class MutationTrackingService
 
         void start()
         {
-            executor.scheduleWithFixedDelay(this, BROADCAST_INTERVAL_MILLIS, BROADCAST_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+            // executor.scheduleWithFixedDelay(this, BROADCAST_INTERVAL_MILLIS, BROADCAST_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
         }
 
         @Override

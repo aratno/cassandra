@@ -27,15 +27,18 @@ import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.concurrent.ExecutorPlus;
+import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.utils.TimeUUID;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.cassandra.concurrent.ExecutorFactory.Global.executorFactory;
 
 /**
  * Stores coordinated and received transfers.
  *
  * TODO: Make changes to pending set durable with SystemKeyspace.savePendingLocalTransfer(transfer)?
- * TODO: GC
+ * TODO: GC when
  */
 class LocalTransfers
 {
@@ -45,6 +48,14 @@ class LocalTransfers
     private final Map<TimeUUID, CoordinatedTransfer> coordinating = new HashMap<>();
     private final Map<ShortMutationId, CoordinatedTransfer> coordinatingActivated = new HashMap<>();
     private final Map<TimeUUID, PendingLocalTransfer> received = new HashMap<>();
+
+    final ExecutorPlus executor = executorFactory().pooled("LocalTrackedTransfers", Integer.MAX_VALUE);
+
+    private static LocalTransfers instance = new LocalTransfers();
+    static LocalTransfers instance()
+    {
+        return instance;
+    }
 
     void save(CoordinatedTransfer transfer)
     {
@@ -65,9 +76,6 @@ class LocalTransfers
         lock.writeLock().lock();
         try
         {
-            Preconditions.checkState(transfer.activationId == null);
-            transfer.activationId = transfer.getActivationId.get();
-
             coordinatingActivated.put(transfer.activationId, transfer);
         }
         finally
@@ -103,9 +111,17 @@ class LocalTransfers
         return checkNotNull(coordinatingActivated.get(activationId));
     }
 
-    public void fetchUnreconciled()
+    public void streamUnreconciledTransfers(InetAddressAndPort to)
     {
-        logger.info("Fetching unreconciled mutations");
-        // TODO
+        for (CoordinatedTransfer transfer : coordinating.values())
+        {
+            CoordinatedTransfer.SingleTransferResult result = transfer.streams.get(to);
+            if (result == null || result.complete())
+                return;
+
+            // How to handle stream failing?
+            logger.debug("Found unreconciled stream to {}: {}", transfer, to);
+            transfer.stream(to).awaitUninterruptibly();
+        };
     }
 }
