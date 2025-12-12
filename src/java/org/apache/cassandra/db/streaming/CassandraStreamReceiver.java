@@ -54,7 +54,6 @@ import org.apache.cassandra.service.accord.TimeOnlyRequestBookkeeping.LatencyReq
 import org.apache.cassandra.replication.MutationTrackingService;
 import org.apache.cassandra.replication.PendingLocalTransfer;
 import org.apache.cassandra.streaming.IncomingStream;
-import org.apache.cassandra.streaming.StreamOperation;
 import org.apache.cassandra.streaming.StreamReceiver;
 import org.apache.cassandra.streaming.StreamSession;
 import org.apache.cassandra.tcm.ClusterMetadata;
@@ -135,7 +134,7 @@ public class CassandraStreamReceiver implements StreamReceiver
         sstables.addAll(finished);
         receivedEntireSSTable = file.isEntireSSTable();
 
-        if (session.streamOperation() == StreamOperation.TRACKED_TRANSFER)
+        if (session.requiresTrackedActivation())
         {
             Preconditions.checkState(cfs.metadata().replicationType().isTracked());
             PendingLocalTransfer transfer = new PendingLocalTransfer(cfs.metadata().id, session.planId(), sstables);
@@ -267,7 +266,7 @@ public class CassandraStreamReceiver implements StreamReceiver
                 logger.debug("[Stream #{}] Received {} sstables from {} ({})", session.planId(), readers.size(), session.peer, readers);
 
                 // Don't mark as live until activated by the stream coordinator
-                if (session.streamOperation() == StreamOperation.TRACKED_TRANSFER)
+                if (session.requiresTrackedActivation())
                     return;
 
                 cfs.addSSTables(readers);

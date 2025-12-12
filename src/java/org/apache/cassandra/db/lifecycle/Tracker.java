@@ -272,8 +272,7 @@ public class Tracker
 
     public void addSSTables(Collection<SSTableReader> sstables)
     {
-        // Temporarily ignore to reproduce full repair streaming anomaly
-        // Preconditions.checkState(!cfstore.metadata().replicationType().isTracked());
+        Preconditions.checkState(!cfstore.metadata().replicationType().isTracked());
         addSSTablesInternal(sstables, false, true, true);
     }
 

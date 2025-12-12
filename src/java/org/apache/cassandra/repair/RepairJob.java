@@ -50,6 +50,7 @@ import org.apache.cassandra.repair.asymmetric.HostDifferences;
 import org.apache.cassandra.repair.asymmetric.PreferedNodeFilter;
 import org.apache.cassandra.repair.asymmetric.ReduceHelper;
 import org.apache.cassandra.repair.state.JobState;
+import org.apache.cassandra.replication.LocalTransfers;
 import org.apache.cassandra.schema.SystemDistributedKeyspace;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.accord.IAccordService;
@@ -263,7 +264,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         }
 
         // When all sync complete, set the final result
-        syncResults.addCallback(new FutureCallback<>()
+        Future<List<SyncStat>> syncCompletion = syncResults.addCallback(new FutureCallback<>()
         {
             @Override
             public void onSuccess(List<SyncStat> stats)
@@ -302,6 +303,9 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
                            : t);
             }
         }, taskExecutor);
+
+        if (cfs.metadata().replicationType().isTracked())
+            LocalTransfers.instance().maybeActivate(syncCompletion);
     }
 
     private Future<List<SyncTask>> createSyncTasks(Future<AccordRepairResult> accordRepair, Future<?> allSnapshotTasks, List<InetAddressAndPort> allEndpoints)

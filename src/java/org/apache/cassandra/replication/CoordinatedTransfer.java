@@ -382,7 +382,7 @@ public class CoordinatedTransfer
     void activateOn(Collection<InetAddressAndPort> peers)
     {
         Preconditions.checkState(!peers.isEmpty());
-        logger.debug("{} Activating {} on {}", logPrefix(), this, peers);
+        logger.debug("{} Activating transfer {} on {}", logPrefix(), this, peers);
         LocalTransfers.instance().activating(this);
 
         // First phase ensures data is present on disk, then second phase does the actual import. This ensures that if

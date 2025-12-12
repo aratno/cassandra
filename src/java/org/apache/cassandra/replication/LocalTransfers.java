@@ -18,6 +18,7 @@
 
 package org.apache.cassandra.replication;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -26,6 +27,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import javax.annotation.Nullable;
 
 import com.google.common.base.Preconditions;
+import com.google.common.util.concurrent.FutureCallback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,8 +37,10 @@ import org.apache.cassandra.io.util.File;
 import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.NoPayload;
+import org.apache.cassandra.repair.SyncStat;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.TimeUUID;
+import org.apache.cassandra.utils.concurrent.Future;
 
 import static org.apache.cassandra.concurrent.ExecutorFactory.Global.executorFactory;
 
@@ -61,7 +65,7 @@ public class LocalTransfers
     final ExecutorPlus executor = executorFactory().pooled("LocalTrackedTransfers", Integer.MAX_VALUE);
 
     private static final LocalTransfers instance = new LocalTransfers();
-    static LocalTransfers instance()
+    public static LocalTransfers instance()
     {
         return instance;
     }
@@ -109,6 +113,27 @@ public class LocalTransfers
         {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * TODO: Begin activation for the missing transfer
+     */
+    public void maybeActivate(Future<List<SyncStat>> syncCompletion)
+    {
+        syncCompletion.addCallback(new FutureCallback<List<SyncStat>>()
+        {
+            @Override
+            public void onSuccess(List<SyncStat> result)
+            {
+                logger.info("maybeActivate onSuccess {}", result);
+            }
+
+            @Override
+            public void onFailure(Throwable t)
+            {
+                logger.info("maybeActivate onFailure", t);
+            }
+        }, executor);
     }
 
     Purger purger = new Purger();

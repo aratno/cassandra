@@ -19,6 +19,7 @@
 package org.apache.cassandra.distributed.test;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -45,6 +46,8 @@ import org.apache.cassandra.distributed.api.Feature;
 import org.apache.cassandra.distributed.api.IInvokableInstance;
 import org.apache.cassandra.distributed.api.NodeToolResult;
 import org.apache.cassandra.distributed.shared.AssertUtils;
+import org.apache.cassandra.distributed.shared.ClusterUtils;
+import org.apache.cassandra.distributed.test.tracking.MutationTrackingReadReconciliationTest;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.assertj.core.api.Assertions;
 import org.awaitility.Awaitility;
@@ -53,6 +56,7 @@ import static net.bytebuddy.implementation.MethodDelegation.to;
 import static net.bytebuddy.matcher.ElementMatchers.named;
 import static net.bytebuddy.matcher.ElementMatchers.takesNoArguments;
 import static org.apache.cassandra.distributed.api.ConsistencyLevel.ALL;
+import static org.apache.cassandra.distributed.api.ConsistencyLevel.QUORUM;
 import static org.apache.cassandra.distributed.shared.AssertUtils.row;
 
 public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
@@ -114,7 +118,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
     public void testFullRepairPartiallyCompleteAnomaly() throws IOException, ExecutionException, InterruptedException, TimeoutException
     {
         try (Cluster cluster = Cluster.build(3)
-                                     .withInstanceInitializer(RepairFailureHelper::install)
+                                     .withInstanceInitializer(StreamReceiverFailureHelper::install)
                                      .withConfig(cfg -> cfg
                                                            .with(Feature.NETWORK)
                                                            .with(Feature.GOSSIP)
@@ -169,36 +173,74 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
             });
 
             // Prevent repair stream from completing
-            MISSING.runOnInstance(() -> RepairFailureHelper.shouldWait.set(true));
+            MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldWait.set(true));
 
             // Run full repair from COORDINATING
             ExecutorService repairExecutor = Executors.newSingleThreadExecutor();
-            Future<NodeToolResult> repairing = repairExecutor.submit(() -> COORDINATING.nodetoolResult("repair", "--full", KEYSPACE));
-
+            Future<NodeToolResult> failingRepair = repairExecutor.submit(() -> COORDINATING.nodetoolResult("repair", "--full", KEYSPACE));
             Awaitility.waitAtMost(10, TimeUnit.SECONDS).pollDelay(1, TimeUnit.SECONDS)
                       .until(() -> {
-                          int finished = RepairFailureHelper.getFinishedRepairs(RECEIVING);
+                          int finished = StreamReceiverFailureHelper.getFinishedRepairs(RECEIVING);
                           return finished > 0;
                       });
-            MISSING.runOnInstance(() -> RepairFailureHelper.shouldThrow.set(true));
-            repairing.get(10, TimeUnit.SECONDS);
+            MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldThrow.set(true));
+            failingRepair.get(10, TimeUnit.SECONDS).asserts().failure();
             repairExecutor.shutdown();
 
-            // RECEIVING should have the repaired SSTable but not MISSING
-            RECEIVING.runOnInstance(() -> {
-                Set<SSTableReader> live = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE).getTracker().getView().liveSSTables();
-                Assertions.assertThat(live).isNotEmpty();
-            });
-            MISSING.runOnInstance(() -> {
-                Set<SSTableReader> live = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE).getTracker().getView().liveSSTables();
-                Assertions.assertThat(live).isEmpty();
+            // Even after partial repair, RECEIVED should not move its SSTable to the live set, since the repair failed
+            cluster.forEach(instance -> {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1");
+                if (instance == COORDINATING)
+                    AssertUtils.assertRows(rows, row(1, 1));
+                else
+                    AssertUtils.assertRows(rows);
             });
 
-            Object[][] rows = RECEIVING.executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1");
-            AssertUtils.assertRows(rows, row(1, 1));
+            /*
+            At this point, the repair is complete and partially applied. RECEIVED has an SSTable it received from
+            repair, and MISSING has no SSTables. If we were to do a tracked data read against RECEIVED, we'd have an
+            emptpy summary but rows, and if we were to execute the same read against MISSING we'd have an entirely
+            empty response. This would break monotonicity if a client executes a QUORUM read against RECEIVED then
+            against missing, because the empty summaries lead to no reconciliation happening.
 
-            Object[][] empty = MISSING.executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1");
-            AssertUtils.assertRows(empty);
+            To provide monotonicity in this scenario, we integrate the full repair with bulk transfer machinery and
+            tag the SSTables with transfer IDs that can be included in summaries and reconciled. Then, the initial data
+            read against RECEIVED includes transfer IDs that are reconciled. Reconciliation detects that RECEIVED has an
+            SSTable that isn't present on MISSING and streams them, so the subsequent read against MISSING is up to
+            date.
+            */
+
+            {
+                MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldWait.set(false));
+                MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldThrow.set(false));
+                // Don't let coordinating act as a replica for the read
+                cluster.filters().inbound().to(ClusterUtils.instanceId(COORDINATING)).drop();
+                MutationTrackingReadReconciliationTest.awaitNodeDead(RECEIVING, COORDINATING);
+            }
+            {
+                long mark = MISSING.logs().mark();
+                Object[][] rows = RECEIVING.coordinator().execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1", QUORUM);
+                AssertUtils.assertRows(rows, row(1, 1));
+                List<String> logs = MISSING.logs().watchFor(mark, Duration.ofSeconds(10), "Finished activating transfer").getResult();
+                Assertions.assertThat(logs).hasSize(1);
+            }
+            cluster.filters().reset();
+            MutationTrackingReadReconciliationTest.awaitNodeAlive(RECEIVING, COORDINATING);
+
+            // Now all peers should agree on the local data
+            cluster.forEach(instance -> {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1");
+                AssertUtils.assertRows(rows, row(1, 1));
+            });
+
+            // Run another repair, should succeed but have nothing to sync
+            {
+                long mark = COORDINATING.logs().mark();
+                NodeToolResult repair = COORDINATING.nodetoolResult("repair", "--full", KEYSPACE);
+                List<String> logs = COORDINATING.logs().watchFor(mark, Duration.ofSeconds(10), "Activating transfer .* on ").getResult();
+                Assertions.assertThat(logs).isEmpty();
+                repair.asserts().success();
+            }
 
             /*
             This test will fail periodically because the commitlog has shut down but LogStatePersister wants to update
@@ -207,9 +249,9 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
         }
     }
 
-    public static class RepairFailureHelper
+    public static class StreamReceiverFailureHelper
     {
-        private static final Logger logger = LoggerFactory.getLogger(RepairFailureHelper.class);
+        private static final Logger logger = LoggerFactory.getLogger(StreamReceiverFailureHelper.class);
 
         static AtomicBoolean shouldThrow = new AtomicBoolean(false);
         static AtomicBoolean shouldWait = new AtomicBoolean(false);
@@ -222,7 +264,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
         {
             new ByteBuddy().rebase(org.apache.cassandra.db.streaming.CassandraStreamReceiver.class)
                            .method(named("finished").and(takesNoArguments()))
-                           .intercept(to(RepairFailureHelper.class))
+                           .intercept(to(StreamReceiverFailureHelper.class))
                            .make()
                            .load(classLoader, ClassLoadingStrategy.Default.INJECTION);
         }
@@ -244,7 +286,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
 
         private static int getFinishedRepairs(IInvokableInstance instance)
         {
-            return instance.callOnInstance(() -> RepairFailureHelper.count.get());
+            return instance.callOnInstance(() -> StreamReceiverFailureHelper.count.get());
         }
     }
 }
