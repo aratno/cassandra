@@ -67,6 +67,9 @@ import org.apache.cassandra.repair.messages.RepairMessage;
 import org.apache.cassandra.repair.messages.RepairOption;
 import org.apache.cassandra.repair.state.CoordinatorState;
 import org.apache.cassandra.repair.state.ParticipateState;
+import org.apache.cassandra.schema.KeyspaceMetadata;
+import org.apache.cassandra.schema.ReplicationType;
+import org.apache.cassandra.schema.Schema;
 import org.apache.cassandra.schema.SchemaConstants;
 import org.apache.cassandra.schema.SystemDistributedKeyspace;
 import org.apache.cassandra.schema.TableMetadata;
@@ -294,6 +297,28 @@ public class RepairCoordinator implements Runnable, ProgressEventNotifier, Repai
     {
         if (options.paxosOnly() && options.accordOnly())
             throw new IllegalArgumentException("Cannot specify a repair as both paxos only and accord only");
+
+        // Check for tracked keyspaces - repairs are not supported on tracked keyspaces
+        Set<String> trackedKeyspaces = new HashSet<>();
+        for (ColumnFamilyStore cfs : columnFamilies)
+        {
+            String keyspaceName = cfs.keyspace.getName();
+            KeyspaceMetadata keyspaceMetadata = Schema.instance.getKeyspaceMetadata(keyspaceName);
+            if (keyspaceMetadata != null && keyspaceMetadata.params.replicationType == ReplicationType.tracked)
+            {
+                trackedKeyspaces.add(keyspaceName);
+            }
+        }
+
+        /*
+        if (!trackedKeyspaces.isEmpty())
+        {
+            throw new IllegalArgumentException(String.format("Repair is not supported on tracked keyspaces: %s. " +
+                                                            "Tracked keyspaces use mutation tracking for durability guarantees " +
+                                                            "and are incompatible with traditional repair mechanisms.",
+                                                            String.join(", ", trackedKeyspaces)));
+        }
+        */
 
         for (ColumnFamilyStore cfs : columnFamilies)
         {

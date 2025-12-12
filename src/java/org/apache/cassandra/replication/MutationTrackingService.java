@@ -1060,8 +1060,9 @@ public class MutationTrackingService
     private static class ReplicatedOffsetsBroadcaster
     {
         // TODO (later): a more intelligent heuristic for scheduling broadcasts
-        private static final long TRANSIENT_BROADCAST_INTERVAL_MILLIS = 200;
-        private static final long DURABLE_BROADCAST_INTERVAL_MILLIS = 60_000;
+        // TODO: Revert before merge, just increased frequency for test
+        private static final long TRANSIENT_BROADCAST_INTERVAL_MILLIS = 1_000;
+        private static final long DURABLE_BROADCAST_INTERVAL_MILLIS = 1_000;
 
         private volatile boolean isPaused = false;
 
@@ -1110,11 +1111,13 @@ public class MutationTrackingService
     private static class LogStatePersister implements Runnable
     {
         // TODO (expected): consider a different interval
-        private static final long PERSIST_INTERVAL_MINUTES = 1;
+        // TODO: Revert before merge, just increased frequency for test
+        // private static final long PERSIST_INTERVAL_MILLIS = 60_000;
+        private static final long PERSIST_INTERVAL_MILLIS = 1_000;
 
         void start()
         {
-            executor.scheduleWithFixedDelay(this, PERSIST_INTERVAL_MINUTES, PERSIST_INTERVAL_MINUTES, TimeUnit.MINUTES);
+            executor.scheduleWithFixedDelay(this, PERSIST_INTERVAL_MILLIS, PERSIST_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
         }
 
         @Override

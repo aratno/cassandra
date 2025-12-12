@@ -1691,6 +1691,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean, Memtable.Owner
      *
      * param @ filename - filename just flushed to disk
      */
+    @VisibleForTesting
     public void addSSTable(SSTableReader sstable)
     {
         assert sstable.getColumnFamilyName().equals(name);

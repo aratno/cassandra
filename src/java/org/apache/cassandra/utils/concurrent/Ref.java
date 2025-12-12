@@ -100,8 +100,8 @@ import static org.apache.cassandra.utils.Throwables.merge;
 public final class Ref<T> implements RefCounted<T>
 {
     static final Logger logger = LoggerFactory.getLogger(Ref.class);
-    public static final boolean TRACE_ENABLED = TEST_DEBUG_REF_COUNT.getBoolean();
-    public static final boolean DEBUG_EVENTS_ENABLED = TEST_DEBUG_REF_EVENTS.getBoolean();
+    public static final boolean TRACE_ENABLED = TEST_DEBUG_REF_COUNT.getBoolean(true);
+    public static final boolean DEBUG_EVENTS_ENABLED = TEST_DEBUG_REF_EVENTS.getBoolean(true);
     static OnLeak ON_LEAK;
 
     @Shared(scope = SIMULATION)

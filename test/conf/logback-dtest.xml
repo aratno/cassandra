@@ -58,7 +58,7 @@
   <logger name="org.apache.cassandra.service.accord" level="TRACE" />
   -->
 
-  <root level="DEBUG">
+  <root level="TRACE">
     <appender-ref ref="INSTANCEFILE" /> <!-- use blocking to avoid race conditions with appending and searching -->
     <appender-ref ref="INSTANCESTDERR" />
     <appender-ref ref="INSTANCESTDOUT" />
