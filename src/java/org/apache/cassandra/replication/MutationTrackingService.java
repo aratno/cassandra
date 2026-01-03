@@ -18,6 +18,7 @@
 package org.apache.cassandra.replication;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -233,6 +234,35 @@ public class MutationTrackingService
         }
     }
 
+    // Requires that ranges is aligned to a single shard
+    public MutationId nextMutationId(String keyspace, Collection<Range<Token>> ranges)
+    {
+        shardLock.readLock().lock();
+        try
+        {
+            KeyspaceShards shards = getOrCreateShards(keyspace);
+            Shard shard = null;
+            for (Range<Token> range : ranges)
+            {
+                Shard curShard = shards.lookUp(range);
+                if (curShard == null)
+                    throw new UnknownShardException(range, shards.groups);
+                if (shard == null)
+                    shard = curShard;
+                else if (shard != curShard)
+                    throw new IllegalStateException(String.format("Cannot generate a mutation ID for ranges (%s) that span across more than one shard (%s, %s)", ranges, shard, curShard));
+            }
+            Preconditions.checkNotNull(shard);
+            MutationId id = shard.nextId();
+            logger.trace("Created new mutation id {}", id);
+            return id;
+        }
+        finally
+        {
+            shardLock.readLock().unlock();
+        }
+    }
+
     public void sentWriteRequest(Mutation mutation, IntHashSet toHostIds)
     {
         Preconditions.checkArgument(!mutation.id().isNone());
@@ -257,7 +287,7 @@ public class MutationTrackingService
         }
     }
 
-    public void receivedActivationResponse(CoordinatedTransfer transfer, InetAddressAndPort fromHost)
+    public void receivedActivationResponse(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort fromHost)
     {
         shardLock.readLock().lock();
         try
@@ -286,7 +316,7 @@ public class MutationTrackingService
         activeReconciler.schedule(mutationId, onHost, ActiveLogReconciler.Priority.REGULAR);
     }
 
-    public void retryFailedTransfer(CoordinatedTransfer transfer, InetAddressAndPort onHost, Throwable cause)
+    public void retryFailedTransfer(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort onHost, Throwable cause)
     {
         if (transfer.isCommitted())
         {
@@ -374,10 +404,10 @@ public class MutationTrackingService
             logger.info("Creating tracked bulk transfers for keyspace '{}' SSTables {}...", keyspace, sstables);
 
             KeyspaceShards shards = checkNotNull(keyspaceShards.get(keyspace));
-            CoordinatedTransfers transfers = CoordinatedTransfers.create(keyspace, shards, sstables, cl);
+            TrackedImportTransfers transfers = TrackedImportTransfers.create(keyspace, shards, sstables, cl);
             logger.info("Split input SSTables into transfers {}", transfers);
 
-            for (CoordinatedTransfer transfer : transfers)
+            for (TrackedImportTransfer transfer : transfers)
                 transfer.execute();
         }
         finally
@@ -397,7 +427,15 @@ public class MutationTrackingService
         PendingLocalTransfer pending = LocalTransfers.instance().getPendingTransfer(activation.planId);
         if (pending == null)
             throw new IllegalStateException(String.format("Cannot activate unknown local pending transfer %s", activation));
-        pending.activate(activation);
+        try
+        {
+            pending.activate(activation);
+        }
+        catch (Exception e)
+        {
+            logger.error("Local activation of {} failed due to error", activation, e);
+            throw e;
+        }
 
         shardLock.readLock().lock();
         try

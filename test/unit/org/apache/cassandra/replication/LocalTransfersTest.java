@@ -33,13 +33,13 @@ import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.utils.TimeUUID;
 import org.assertj.core.api.Assertions;
 
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.COMMITTED;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.COMMITTING;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.PREPARE_FAILED;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.PREPARING;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.STREAM_COMPLETE;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.STREAM_FAILED;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.STREAM_NOOP;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.COMMITTED;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.COMMITTING;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.PREPARE_FAILED;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.PREPARING;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.STREAM_COMPLETE;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.STREAM_FAILED;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.STREAM_NOOP;
 import static org.apache.cassandra.utils.TimeUUID.Generator.nextTimeUUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -66,17 +66,17 @@ public class LocalTransfersTest
         planId = nextTimeUUID();
     }
 
-    private CoordinatedTransfer coordinatedTransfer(ShortMutationId transferId)
+    private TrackedImportTransfer coordinatedTransfer(ShortMutationId transferId)
     {
         return coordinatedTransfer(transferId, new Range<>(tk(0), tk(1000)));
     }
 
-    private CoordinatedTransfer coordinatedTransfer(ShortMutationId transferId, Range<Token> range)
+    private TrackedImportTransfer coordinatedTransfer(ShortMutationId transferId, Range<Token> range)
     {
         MutationId mutationId = transferId != null
             ? new MutationId(transferId.logId(), transferId.offset(), (int) System.currentTimeMillis())
             : null;
-        return new CoordinatedTransfer(range, mutationId);
+        return new TrackedImportTransfer(range, mutationId);
     }
 
     private PendingLocalTransfer pendingTransfer(TimeUUID planId)
@@ -95,12 +95,12 @@ public class LocalTransfersTest
     @Test
     public void testSaveCoordinatedTransfer()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         localTransfers.save(transfer);
         localTransfers.activating(transfer);
 
-        CoordinatedTransfer loaded = localTransfers.getActivatedTransfer(transferId);
+        AbstractCoordinatedBulkTransfer loaded = localTransfers.getActivatedTransfer(transferId);
         Assertions.assertThat(loaded).isEqualTo(transfer);
 
         assertThatThrownBy(() -> localTransfers.save(transfer))
@@ -110,12 +110,12 @@ public class LocalTransfersTest
     @Test
     public void testActivatingTransfer()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         localTransfers.save(transfer);
         localTransfers.activating(transfer);
 
-        CoordinatedTransfer retrieved = localTransfers.getActivatedTransfer(transferId);
+        AbstractCoordinatedBulkTransfer retrieved = localTransfers.getActivatedTransfer(transferId);
         assertThat(retrieved).isEqualTo(transfer);
     }
 
@@ -146,17 +146,17 @@ public class LocalTransfersTest
     @Test
     public void testGetActivatedTransferNotFound()
     {
-        CoordinatedTransfer retrieved = localTransfers.getActivatedTransfer(transferId);
+        AbstractCoordinatedBulkTransfer retrieved = localTransfers.getActivatedTransfer(transferId);
         assertThat(retrieved).isNull();
     }
 
     @Test
     public void testPurgingTransferNotStarted()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // All streams in INIT state - should NOT be purgeable (stream hasn't started yet)
-        CoordinatedTransfer.SingleTransferResult result = CoordinatedTransfer.SingleTransferResult.Init();
+        TrackedImportTransfer.SingleTransferResult result = TrackedImportTransfer.SingleTransferResult.Init();
         transfer.streamResults.put(mock(InetAddressAndPort.class), result);
 
         Assertions.assertThat(localTransfers.purger.test(transfer)).isFalse();
@@ -165,11 +165,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferAllStreamsComplete()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // All streams in STREAM_COMPLETE state - should NOT be purgeable (no failures)
-        CoordinatedTransfer.SingleTransferResult result1 = CoordinatedTransfer.SingleTransferResult.StreamComplete(nextTimeUUID());
-        CoordinatedTransfer.SingleTransferResult result2 = CoordinatedTransfer.SingleTransferResult.StreamComplete(nextTimeUUID());
+        TrackedImportTransfer.SingleTransferResult result1 = TrackedImportTransfer.SingleTransferResult.StreamComplete(nextTimeUUID());
+        TrackedImportTransfer.SingleTransferResult result2 = TrackedImportTransfer.SingleTransferResult.StreamComplete(nextTimeUUID());
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -180,10 +180,10 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferPrepareFailed()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(PREPARE_FAILED, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(PREPARING, planId);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(PREPARE_FAILED, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(PREPARING, planId);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -194,11 +194,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferAllActivationCommitted()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // All streams in ACTIVATE_COMMITTED state - should be purgeable (allComplete = true)
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(COMMITTED, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(COMMITTED, planId);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(COMMITTED, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(COMMITTED, planId);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -209,11 +209,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferMixedCommittedAndNoop()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // Mix of ACTIVATE_COMMITTED and STREAM_NOOP - should be purgeable (allComplete = true)
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(COMMITTED, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(STREAM_NOOP, null);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(COMMITTED, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(STREAM_NOOP, null);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -224,11 +224,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferActivationPartialCommitted()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // One stream in ACTIVATE_PREPARING - should NOT be purgeable
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(PREPARING, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(COMMITTING, planId);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(PREPARING, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(COMMITTING, planId);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -239,11 +239,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferAllStreamsFailed()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // All streams in STREAM_FAILED state - should be purgeable (noneActivated = true)
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(STREAM_FAILED, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(STREAM_FAILED, planId);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(STREAM_FAILED, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(STREAM_FAILED, planId);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -254,11 +254,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferMixedInitAndFailed()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // Mix of INIT and STREAM_FAILED - should be purgeable (has failure, none activated)
-        CoordinatedTransfer.SingleTransferResult result1 = CoordinatedTransfer.SingleTransferResult.Init();
-        CoordinatedTransfer.SingleTransferResult result2 = CoordinatedTransfer.SingleTransferResult.Init().streamFailed(nextTimeUUID());
+        TrackedImportTransfer.SingleTransferResult result1 = TrackedImportTransfer.SingleTransferResult.Init();
+        TrackedImportTransfer.SingleTransferResult result2 = TrackedImportTransfer.SingleTransferResult.Init().streamFailed(nextTimeUUID());
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -269,11 +269,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferMixedCompleteAndFailed()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // Mix of STREAM_COMPLETE and STREAM_FAILED - should be purgeable (has failure, none activated)
-        CoordinatedTransfer.SingleTransferResult result1 = CoordinatedTransfer.SingleTransferResult.StreamComplete(nextTimeUUID());
-        CoordinatedTransfer.SingleTransferResult result2 = CoordinatedTransfer.SingleTransferResult.Init().streamFailed(nextTimeUUID());
+        TrackedImportTransfer.SingleTransferResult result1 = TrackedImportTransfer.SingleTransferResult.StreamComplete(nextTimeUUID());
+        TrackedImportTransfer.SingleTransferResult result2 = TrackedImportTransfer.SingleTransferResult.Init().streamFailed(nextTimeUUID());
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -284,12 +284,12 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferMixedStreamingCompleteAndPreparing()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // Mix of STREAM_COMPLETE and ACTIVATE_PREPARING - should NOT be purgeable
         // (noneActivated = false because of ACTIVATE_PREPARING, allComplete = false)
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(STREAM_COMPLETE, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(PREPARING, planId);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(STREAM_COMPLETE, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(PREPARING, planId);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -300,10 +300,10 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferMixedCommittingCommitted()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(COMMITTING, planId);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(COMMITTED, planId);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(COMMITTING, planId);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(COMMITTED, planId);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -314,11 +314,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferWithNullTransferId()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(null);
+        TrackedImportTransfer transfer = coordinatedTransfer(null);
 
         // All streams complete but transferId is null - should NOT be purgeable
-        CoordinatedTransfer.SingleTransferResult result1 = new CoordinatedTransfer.SingleTransferResult(STREAM_COMPLETE, null);
-        CoordinatedTransfer.SingleTransferResult result2 = new CoordinatedTransfer.SingleTransferResult(STREAM_COMPLETE, null);
+        TrackedImportTransfer.SingleTransferResult result1 = new TrackedImportTransfer.SingleTransferResult(STREAM_COMPLETE, null);
+        TrackedImportTransfer.SingleTransferResult result2 = new TrackedImportTransfer.SingleTransferResult(STREAM_COMPLETE, null);
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);
@@ -330,11 +330,11 @@ public class LocalTransfersTest
     @Test
     public void testPurgingTransferNoopOnly()
     {
-        CoordinatedTransfer transfer = coordinatedTransfer(transferId);
+        TrackedImportTransfer transfer = coordinatedTransfer(transferId);
 
         // All streams in STREAM_NOOP - should be purgeable (both noneActivated and allComplete are true)
-        CoordinatedTransfer.SingleTransferResult result1 = CoordinatedTransfer.SingleTransferResult.Noop();
-        CoordinatedTransfer.SingleTransferResult result2 = CoordinatedTransfer.SingleTransferResult.Noop();
+        TrackedImportTransfer.SingleTransferResult result1 = TrackedImportTransfer.SingleTransferResult.Noop();
+        TrackedImportTransfer.SingleTransferResult result2 = TrackedImportTransfer.SingleTransferResult.Noop();
 
         transfer.streamResults.put(mock(InetAddressAndPort.class), result1);
         transfer.streamResults.put(mock(InetAddressAndPort.class), result2);

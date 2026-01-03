@@ -902,7 +902,7 @@ public class RepairJobTest
                         break;
                     case SYNC_REQ:
                         SyncRequest syncRequest = (SyncRequest) message.payload;
-                        session.syncComplete(sessionJobDesc, Message.builder(Verb.SYNC_RSP, new SyncResponse(sessionJobDesc, new SyncNodePair(syncRequest.src, syncRequest.dst), true, Collections.emptyList())).from(to).build());
+                        session.syncComplete(sessionJobDesc, Message.builder(Verb.SYNC_RSP, new SyncResponse(sessionJobDesc, new SyncNodePair(syncRequest.src, syncRequest.dst), true, Collections.emptyList(), null)).from(to).build());
                         break;
                     default:
                         break;

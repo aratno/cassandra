@@ -51,6 +51,9 @@ import org.apache.cassandra.repair.asymmetric.PreferedNodeFilter;
 import org.apache.cassandra.repair.asymmetric.ReduceHelper;
 import org.apache.cassandra.repair.state.JobState;
 import org.apache.cassandra.replication.LocalTransfers;
+import org.apache.cassandra.replication.MutationId;
+import org.apache.cassandra.replication.MutationTrackingService;
+import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.schema.SystemDistributedKeyspace;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.accord.IAccordService;
@@ -98,6 +101,8 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
     @VisibleForTesting
     final List<SyncTask> syncTasks = new CopyOnWriteArrayList<>();
 
+    private final MutationId transferId;
+
     /**
      * Create repair job to run on specific columnfamily
      *  @param session RepairSession that this RepairJob belongs
@@ -121,6 +126,10 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         if ((!session.repairData && !session.repairPaxos) && !metadata.requiresAccordSupport())
             throw new IllegalArgumentException(String.format("Cannot run accord only repair on %s.%s, which isn't configured for accord operations", cfs.keyspace.getName(), cfs.name));
 
+        if (cfs.metadata().replicationType().isTracked())
+            transferId = MutationTrackingService.instance.nextMutationId(desc.keyspace, desc.ranges);
+        else
+            transferId = null;
     }
 
     public long getNowInSeconds()
@@ -134,6 +143,11 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         {
             return nowInSeconds;
         }
+    }
+
+    public ShortMutationId getTransferId()
+    {
+        return transferId;
     }
 
     @Override
@@ -254,6 +268,14 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
             // that there are in memory at once. When all validations complete, submit sync tasks out of the scheduler.
             syncResults = session.validationScheduler.schedule(() -> createSyncTasks(accordRepair, allSnapshotTasks, allEndpoints), taskExecutor)
                                                                             .flatMap(this::executeTasks, taskExecutor);
+
+            // For tracked keyspaces, we need to ensure sync'd data is present in the log
+            boolean isTracked = cfs.metadata().replicationType().isTracked();
+            if (isTracked)
+            {
+                Preconditions.checkState(transferId != null);
+                LocalTransfers.instance().onRepairSyncCompletion(this, syncResults, taskExecutor);
+            }
         }
         else
         {
@@ -264,7 +286,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         }
 
         // When all sync complete, set the final result
-        Future<List<SyncStat>> syncCompletion = syncResults.addCallback(new FutureCallback<>()
+        syncResults.addCallback(new FutureCallback<>()
         {
             @Override
             public void onSuccess(List<SyncStat> stats)
@@ -303,9 +325,6 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
                            : t);
             }
         }, taskExecutor);
-
-        if (cfs.metadata().replicationType().isTracked())
-            LocalTransfers.instance().maybeActivate(syncCompletion);
     }
 
     private Future<List<SyncTask>> createSyncTasks(Future<AccordRepairResult> accordRepair, Future<?> allSnapshotTasks, List<InetAddressAndPort> allEndpoints)
@@ -448,6 +467,9 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
 
             if (!tasks.isEmpty())
                 state.phase.streamSubmitted();
+
+            if (cfs.metadata().replicationType().isTracked())
+                LocalTransfers.instance().onRepairSyncExecution(this, desc, tasks);
 
             for (SyncTask task : tasks)
             {

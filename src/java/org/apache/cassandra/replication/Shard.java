@@ -182,7 +182,7 @@ public class Shard
         getOrCreate(activation.transferId).finishActivation(transfer, activation);
     }
 
-    void receivedActivationResponse(CoordinatedTransfer transfer, InetAddressAndPort onHost)
+    void receivedActivationResponse(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort onHost)
     {
         int onHostId = ClusterMetadata.current().directory.peerId(onHost).id();
         getOrCreate(transfer.id()).receivedActivationResponse(transfer, onHostId);
@@ -391,5 +391,16 @@ public class Shard
     void collectShardReconciledOffsetsToBuilder(ReconciledKeyspaceOffsets.Builder keyspaceBuilder)
     {
         logs.values().forEach(log -> keyspaceBuilder.put(log.logId, log.collectReconciledOffsets(), range));
+    }
+
+    @Override
+    public String toString()
+    {
+        return "Shard{" +
+               "participants=" + participants +
+               ", range=" + range +
+               ", keyspace='" + keyspace + '\'' +
+               ", localNodeId=" + localNodeId +
+               '}';
     }
 }

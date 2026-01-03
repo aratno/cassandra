@@ -269,10 +269,11 @@ public class UnreconciledMutations
                     result.addDirectly(mutation);
                     continue;
                 }
-                CoordinatedTransfer transfer = LocalTransfers.instance().getActivatedTransfer(id);
+                AbstractCoordinatedBulkTransfer transfer = LocalTransfers.instance().getActivatedTransfer(id);
                 if (transfer != null)
                 {
-                    result.transfers.add(transfer.id(), transfer.sstables);
+                    Preconditions.checkState(transfer instanceof TrackedImportTransfer);
+                    result.transfers.add(transfer.id(), ((TrackedImportTransfer) transfer).sstables);
                     continue;
                 }
 

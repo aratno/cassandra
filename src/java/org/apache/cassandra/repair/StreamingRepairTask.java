@@ -120,7 +120,7 @@ public class StreamingRepairTask implements Runnable, StreamEventHandler
     {
         logger.info("[repair #{}] streaming task succeed, returning response to {}", desc.sessionId, initiator);
         this.state.phase.success();
-        RepairMessage.sendMessageWithRetries(ctx, new SyncResponse(desc, src, dst, true, state.createSummaries()), SYNC_RSP, initiator);
+        RepairMessage.sendMessageWithRetries(ctx, new SyncResponse(desc, src, dst, true, state.createSummaries(), state.planId), SYNC_RSP, initiator);
     }
 
     /**
@@ -130,6 +130,6 @@ public class StreamingRepairTask implements Runnable, StreamEventHandler
     public void onFailure(Throwable t)
     {
         this.state.phase.fail(t);
-        RepairMessage.sendMessageWithRetries(ctx, new SyncResponse(desc, src, dst, false, Collections.emptyList()), SYNC_RSP, initiator);
+        RepairMessage.sendMessageWithRetries(ctx, new SyncResponse(desc, src, dst, false, Collections.emptyList(), null), SYNC_RSP, initiator);
     }
 }

@@ -42,7 +42,7 @@ import org.apache.cassandra.utils.TimeUUID;
  * reads) to live (visible to reads and compactions), by associating the streaming plan ID with a mutation ID, referred
  * to as the transfer ID.
  * <p>
- * See {@link CoordinatedTransfer} for the lifecycle of a transfer and when a {@link TransferActivation} is sent.
+ * See {@link TrackedImportTransfer} for the lifecycle of a transfer and when a {@link TransferActivation} is sent.
  */
 public class TransferActivation
 {
@@ -78,7 +78,7 @@ public class TransferActivation
         }
     }
 
-    public TransferActivation(CoordinatedTransfer transfer, InetAddressAndPort peer, Phase phase)
+    public TransferActivation(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort peer, Phase phase)
     {
         this(transfer.streamResults.get(peer).planId(), transfer.id(), ClusterMetadata.current().myNodeId(), phase);
     }

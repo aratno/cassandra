@@ -21,7 +21,6 @@ package org.apache.cassandra.replication;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -35,10 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
-import javax.annotation.CheckReturnValue;
-
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,14 +67,9 @@ import org.apache.cassandra.utils.TimeUUID;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.COMMITTED;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.COMMITTING;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.PREPARE_FAILED;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.PREPARING;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.INIT;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.STREAM_COMPLETE;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.STREAM_FAILED;
-import static org.apache.cassandra.replication.CoordinatedTransfer.SingleTransferResult.State.STREAM_NOOP;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.COMMITTED;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.COMMITTING;
+import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.STREAM_COMPLETE;
 import static org.apache.cassandra.replication.TransferActivation.Phase;
 
 /**
@@ -116,40 +107,35 @@ import static org.apache.cassandra.replication.TransferActivation.Phase;
  * activations across replicas, avoid expensive operations like file copies or index builds during
  * {@link TransferActivation#apply()}.
  */
-public class CoordinatedTransfer
+public class TrackedImportTransfer extends AbstractCoordinatedBulkTransfer
 {
-    private static final Logger logger = LoggerFactory.getLogger(CoordinatedTransfer.class);
+    private static final Logger logger = LoggerFactory.getLogger(TrackedImportTransfer.class);
 
-    String logPrefix()
-    {
-        return String.format("[CoordinatedTransfer #%s]", id);
-    }
-
-    private final ShortMutationId id;
     private final String keyspace;
     private final Range<Token> range;
-    private final ConsistencyLevel cl;
     final Collection<SSTableReader> sstables;
+    private final ConsistencyLevel cl;
+    // TODO: Refactor to new class PendingTransfers
     final ConcurrentMap<InetAddressAndPort, SingleTransferResult> streamResults;
 
     @VisibleForTesting
-    CoordinatedTransfer(Range<Token> range, MutationId id)
+    TrackedImportTransfer(Range<Token> range, MutationId id)
     {
+        super(id);
         this.keyspace = null;
         this.range = range;
         this.sstables = Collections.emptyList();
         this.cl = null;
-        this.id = id;
         this.streamResults = new ConcurrentHashMap<>();
     }
 
-    CoordinatedTransfer(String keyspace, Range<Token> range, Participants participants, Collection<SSTableReader> sstables, ConsistencyLevel cl, Supplier<MutationId> nextId)
+    TrackedImportTransfer(String keyspace, Range<Token> range, Participants participants, Collection<SSTableReader> sstables, ConsistencyLevel cl, Supplier<MutationId> nextId)
     {
+        super(nextId.get());
         this.keyspace = keyspace;
         this.range = range;
         this.sstables = sstables;
         this.cl = cl;
-        this.id = nextId.get();
 
         ClusterMetadata cm = ClusterMetadata.current();
         this.streamResults = new ConcurrentHashMap<>(participants.size());
@@ -158,11 +144,6 @@ public class CoordinatedTransfer
             InetAddressAndPort addr = cm.directory.getNodeAddresses(new NodeId(participants.get(i))).broadcastAddress;
             this.streamResults.put(addr, SingleTransferResult.Init());
         }
-    }
-
-    ShortMutationId id()
-    {
-        return id;
     }
 
     void execute()
@@ -284,15 +265,15 @@ public class CoordinatedTransfer
                 continue;
 
             SingleTransferResult result = entry.getValue();
-            if (result.planId == null)
+            if (result.planId() == null)
             {
                 logger.warn("{} Skipping notification of transfer failure to {} due to unknown planId", logPrefix(), to);
                 continue;
             }
 
-            logger.debug("{}, Notifying {} of transfer failure for plan {}", logPrefix(), to, result.planId);
+            logger.debug("{}, Notifying {} of transfer failure for plan {}", logPrefix(), to, result.planId());
             notifyFailure.responses.add(to);
-            Message<TransferFailed> msg = Message.out(Verb.TRACKED_TRANSFER_FAILED_REQ, new TransferFailed(result.planId));
+            Message<TransferFailed> msg = Message.out(Verb.TRACKED_TRANSFER_FAILED_REQ, new TransferFailed(result.planId()));
             MessagingService.instance().sendWithCallback(msg, to, notifyFailure);
         }
         notifyFailure.get();
@@ -357,7 +338,7 @@ public class CoordinatedTransfer
         if (anyActivated && !awaitingActivation.isEmpty())
         {
             logger.debug("{} Transfer already activated on some peers, sending activations to remaining: {}", logPrefix(), awaitingActivation);
-            activateOn(awaitingActivation);
+            activate(awaitingActivation);
             return;
         }
         // If no activations have been sent out, check whether we have enough planIds back to meet the required CL
@@ -372,126 +353,11 @@ public class CoordinatedTransfer
                     peers.add(peer);
             }
             logger.debug("{} Transfer meets consistency level {}, sending activations to {}", logPrefix(), cl, peers);
-            activateOn(peers);
+            activate(peers);
             return;
         }
 
         logger.debug("{} Nothing to activate", logPrefix());
-    }
-
-    void activateOn(Collection<InetAddressAndPort> peers)
-    {
-        Preconditions.checkState(!peers.isEmpty());
-        logger.debug("{} Activating transfer {} on {}", logPrefix(), this, peers);
-        LocalTransfers.instance().activating(this);
-
-        // First phase ensures data is present on disk, then second phase does the actual import. This ensures that if
-        // something goes wrong (like a topology change during import), we don't have divergence.
-        class Prepare extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
-        {
-            final Set<InetAddressAndPort> responses = ConcurrentHashMap.newKeySet();
-
-            public Prepare()
-            {
-                responses.addAll(peers);
-            }
-
-            @Override
-            public void onResponse(Message<NoPayload> msg)
-            {
-                logger.debug("{} Got response from: {}", logPrefix(), msg.from());
-                responses.remove(msg.from());
-                if (responses.isEmpty())
-                    trySuccess(null);
-            }
-
-            @Override
-            public void onFailure(InetAddressAndPort from, RequestFailure failure)
-            {
-                logger.debug("{} Got failure {} from {}", logPrefix(), failure, from);
-                CoordinatedTransfer.this.streamResults.computeIfPresent(from, (peer, result) -> result.prepareFailed());
-                tryFailure(new RuntimeException("Tracked import failed during PREPARE on " + from + " due to " + failure.reason));
-            }
-        }
-
-        Prepare prepare = new Prepare();
-        for (InetAddressAndPort peer : peers)
-        {
-            TransferActivation activation = new TransferActivation(this, peer, Phase.PREPARE);
-            Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-            logger.debug("{} Sending {} to peer {}", logPrefix(), activation, peer);
-            MessagingService.instance().sendWithCallback(msg, peer, prepare);
-            CoordinatedTransfer.this.streamResults.computeIfPresent(peer, (peer0, result) -> result.preparing());
-        }
-        try
-        {
-            prepare.get();
-        }
-        catch (InterruptedException | ExecutionException e)
-        {
-            Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
-            throw Throwables.unchecked(cause);
-        }
-        logger.debug("{} Activation prepare complete for {}", logPrefix(), peers);
-
-        // Acknowledgement of activation is equivalent to a remote write acknowledgement. The imported SSTables
-        // are now part of the live set, visible to reads.
-        class Commit extends AsyncFuture<Void> implements RequestCallbackWithFailure<Void>
-        {
-            final Set<InetAddressAndPort> responses = ConcurrentHashMap.newKeySet();
-
-            private Commit(Collection<InetAddressAndPort> peers)
-            {
-                responses.addAll(peers);
-            }
-
-            @Override
-            public void onResponse(Message<Void> msg)
-            {
-                logger.debug("{} Activation successfully applied on {}", logPrefix(), msg.from());
-                CoordinatedTransfer.this.streamResults.computeIfPresent(msg.from(), (peer, result) -> result.committed());
-
-                MutationTrackingService.instance.receivedActivationResponse(CoordinatedTransfer.this, msg.from());
-                responses.remove(msg.from());
-                if (responses.isEmpty())
-                {
-                    // All activations complete, schedule cleanup to purge pending SSTables
-                    LocalTransfers.instance().scheduleCleanup();
-                    trySuccess(null);
-                }
-            }
-
-            @Override
-            public void onFailure(InetAddressAndPort from, RequestFailure failure)
-            {
-                logger.error("{} Failed activation on {} due to {}", logPrefix(), from, failure);
-                MutationTrackingService.instance.retryFailedTransfer(CoordinatedTransfer.this, from, failure.failure);
-                // TODO(expected): should only fail if we don't meet requested CL
-                tryFailure(new RuntimeException("Tracked import failed during COMMIT on " + from + " due to " + failure.reason));
-            }
-        }
-
-        Commit commit = new Commit(peers);
-        for (InetAddressAndPort peer : peers)
-        {
-            TransferActivation activation = new TransferActivation(this, peer, Phase.COMMIT);
-            Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-
-            logger.debug("{} Sending {} to peer {}", logPrefix(), activation, peer);
-            MessagingService.instance().sendWithCallback(msg, peer, commit);
-            CoordinatedTransfer.this.streamResults.computeIfPresent(peer, (peer0, result) -> result.committing());
-        }
-
-        try
-        {
-            commit.get();
-        }
-        catch (InterruptedException | ExecutionException e)
-        {
-            Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
-            throw Throwables.unchecked(cause);
-        }
-        logger.debug("{} Activation commit complete for {}", logPrefix(), peers);
     }
 
     public boolean isCommitted()
@@ -502,151 +368,6 @@ public class CoordinatedTransfer
                 return false;
         }
         return true;
-    }
-
-    /**
-     * Tracks the lifecycle of a transfer from the coordinator to a single replica, using a two-phase commit protocol:
-     *
-     * <ul>
-     *   <li>{@link State#INIT}: Transfer created, not yet streaming.</li>
-     *   <li>{@link State#STREAM_COMPLETE}: Streaming successful, SSTables received on replica in pending directory.</li>
-     *   <li>{@link State#STREAM_NOOP}: No data streamed (e.g., SSTable contains no rows in target range).</li>
-     *   <li>{@link State#STREAM_FAILED}: Streaming failed, may not have a streaming plan ID yet.</li>
-     *   <li>{@link State#PREPARING}: Preparing for activation (first phase).</li>
-     *   <li>{@link State#PREPARE_FAILED}: Prepare failed, aborting transfer.</li>
-     *   <li>{@link State#COMMITTING}: Committing transferred SSTables from pending to live set (second phase).</li>
-     *   <li>{@link State#COMMITTED}: Transfer commit acknowledged on coordinator. SSTables now live and visible to reads.</li>
-     * </ul>
-     *
-     * <h3>Valid State Transitions:</h3>
-     * <pre>
-     *                                       ┌────────────────┐
-     *                                       ↓                │
-     *   INIT ──┬──→ STREAM_COMPLETE ──→ PREPARING ──┬──→ COMMITTING ──→ COMMITTED
-     *          │                                    │
-     *          ├──→ STREAM_NOOP                     └──→ PREPARE_FAILED
-     *          │
-     *          └──→ STREAM_FAILED
-     * </pre>
-     *
-     * Failure states may be non-terminal if sufficient replicas reach successful states, depending on the transfer's
-     * consistency level.
-     */
-    static class SingleTransferResult
-    {
-        enum State
-        {
-            INIT,
-            STREAM_NOOP,
-            STREAM_FAILED,
-            STREAM_COMPLETE,
-            PREPARING,
-            PREPARE_FAILED,
-            COMMITTING,
-            COMMITTED;
-
-            EnumSet<State> transitionFrom;
-
-            static
-            {
-                INIT.transitionFrom = EnumSet.noneOf(State.class);
-                STREAM_NOOP.transitionFrom = EnumSet.of(INIT);
-                STREAM_FAILED.transitionFrom = EnumSet.of(INIT);
-                STREAM_COMPLETE.transitionFrom = EnumSet.of(INIT);
-                PREPARING.transitionFrom = EnumSet.of(STREAM_COMPLETE, COMMITTING);
-                PREPARE_FAILED.transitionFrom = EnumSet.of(PREPARING);
-                COMMITTING.transitionFrom = EnumSet.of(PREPARING);
-                COMMITTED.transitionFrom = EnumSet.of(COMMITTING);
-            }
-        }
-
-        final State state;
-        private final TimeUUID planId;
-
-        @VisibleForTesting
-        SingleTransferResult(State state, TimeUUID planId)
-        {
-            this.state = state;
-            this.planId = planId;
-        }
-
-        private boolean canTransition(SingleTransferResult.State to)
-        {
-            return to.transitionFrom.contains(state);
-        }
-
-        public static SingleTransferResult Init()
-        {
-            return new SingleTransferResult(INIT, null);
-        }
-
-        @VisibleForTesting
-        static SingleTransferResult StreamComplete(TimeUUID planId)
-        {
-            return new SingleTransferResult(STREAM_COMPLETE, planId);
-        }
-
-        @VisibleForTesting
-        static SingleTransferResult Noop()
-        {
-            return new SingleTransferResult(STREAM_NOOP, null);
-        }
-
-        @CheckReturnValue
-        private SingleTransferResult transition(State to, TimeUUID planId)
-        {
-            if (!canTransition(to))
-            {
-                logger.error("Ignoring invalid transition from {} to {}", state, to);
-                return this;
-            }
-            // Don't overwrite if the stream succeeded but PREPARE failed, so we can clean up later
-            return new SingleTransferResult(to, planId == null ? this.planId : planId);
-        }
-
-        @CheckReturnValue
-        public SingleTransferResult streamFailed(TimeUUID planId)
-        {
-            return transition(STREAM_FAILED, planId);
-        }
-
-        @CheckReturnValue
-        public SingleTransferResult preparing()
-        {
-            return transition(PREPARING, this.planId);
-        }
-
-        @CheckReturnValue
-        public SingleTransferResult prepareFailed()
-        {
-            return transition(PREPARE_FAILED, this.planId);
-        }
-
-        @CheckReturnValue
-        public SingleTransferResult committing()
-        {
-            return transition(COMMITTING, this.planId);
-        }
-
-        @CheckReturnValue
-        public SingleTransferResult committed()
-        {
-            return transition(COMMITTED, this.planId);
-        }
-
-        public TimeUUID planId()
-        {
-            return planId;
-        }
-
-        @Override
-        public String toString()
-        {
-            return "SingleTransferResult{" +
-                   "state=" + state +
-                   ", planId=" + planId +
-                   '}';
-        }
     }
 
     private SingleTransferResult streamTask(InetAddressAndPort to) throws StreamException, ExecutionException, InterruptedException, TimeoutException
@@ -695,24 +416,24 @@ public class CoordinatedTransfer
     public boolean equals(Object o)
     {
         if (o == null || getClass() != o.getClass()) return false;
-        CoordinatedTransfer transfer = (CoordinatedTransfer) o;
-        return Objects.equals(keyspace, transfer.keyspace) && Objects.equals(range, transfer.range) && Objects.equals(streamResults, transfer.streamResults) && Objects.equals(sstables, transfer.sstables) && cl == transfer.cl && Objects.equals(id, transfer.id);
+        TrackedImportTransfer that = (TrackedImportTransfer) o;
+        return Objects.equals(keyspace, that.keyspace) && Objects.equals(range, that.range) && cl == that.cl && Objects.equals(streamResults, that.streamResults);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(keyspace, range, streamResults, sstables, cl, id);
+        return Objects.hash(keyspace, range, cl, streamResults);
     }
 
     @Override
     public String toString()
     {
-        return "CoordinatedTransfer{" +
-               "id=" + id +
-               ", keyspace='" + keyspace + '\'' +
+        return "TrackedImportTransfer{" +
+               "keyspace='" + keyspace + '\'' +
                ", range=" + range +
                ", cl=" + cl +
+               ", streamResults=" + streamResults +
                ", sstables=" + sstables +
                ", streamResults=" + streamResults +
                '}';

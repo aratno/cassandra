@@ -366,7 +366,7 @@ public abstract class CoordinatorLog
     - On transfer coordinators after they've received a completed activation from a peer (onHostId != me)
     - On local replicas after coordinators have propagated their replicated offsets
     */
-    void receivedActivationResponse(CoordinatedTransfer transfer, int onHostId)
+    void receivedActivationResponse(AbstractCoordinatedBulkTransfer transfer, int onHostId)
     {
         ShortMutationId transferId = transfer.id();
         Preconditions.checkArgument(!transferId.isNone());

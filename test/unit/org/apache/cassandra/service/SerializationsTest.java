@@ -228,9 +228,9 @@ public class SerializationsTest extends AbstractSerializationsTester
                                          Lists.newArrayList(new StreamSummary(TABLE_ID, emptyList(), 5, 100)),
                                          Lists.newArrayList(new StreamSummary(TABLE_ID, emptyList(), 500, 10))
         ));
-        SyncResponse success = new SyncResponse(DESC, src, dest, true, summaries);
+        SyncResponse success = new SyncResponse(DESC, src, dest, true, summaries, null);
         // sync fail
-        SyncResponse fail = new SyncResponse(DESC, src, dest, false, emptyList());
+        SyncResponse fail = new SyncResponse(DESC, src, dest, false, emptyList(), null);
 
         testRepairMessageWrite("service.SyncComplete.bin", SyncResponse.serializer, success, fail);
     }

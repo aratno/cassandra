@@ -29,6 +29,7 @@ import org.apache.cassandra.repair.messages.SyncRequest;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.streaming.SessionSummary;
 import org.apache.cassandra.tracing.Tracing;
+import org.apache.cassandra.utils.TimeUUID;
 
 /**
  * AsymmetricRemoteSyncTask sends {@link SyncRequest} to target node to repair(stream)
@@ -52,11 +53,11 @@ public class AsymmetricRemoteSyncTask extends SyncTask implements CompletableRem
         sendRequest(request, request.src);
     }
 
-    public void syncComplete(boolean success, List<SessionSummary> summaries)
+    public void syncComplete(boolean success, List<SessionSummary> summaries, TimeUUID planId)
     {
         if (success)
         {
-            trySuccess(stat.withSummaries(summaries));
+            trySuccess(stat.withSummaries(summaries, planId));
         }
         else
         {

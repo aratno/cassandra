@@ -124,7 +124,7 @@ public final class ActiveLogReconciler implements Shutdownable
     {
         private static Task from(ShortMutationId id, InetAddressAndPort toHost)
         {
-            CoordinatedTransfer transfer = LocalTransfers.instance().getActivatedTransfer(id);
+            AbstractCoordinatedBulkTransfer transfer = LocalTransfers.instance().getActivatedTransfer(id);
             if (transfer != null)
                 return new TransferTask(transfer, toHost);
             else
@@ -178,10 +178,10 @@ public final class ActiveLogReconciler implements Shutdownable
 
     private static final class TransferTask extends Task
     {
-        private final CoordinatedTransfer transfer;
+        private final AbstractCoordinatedBulkTransfer transfer;
         private final InetAddressAndPort toHost;
 
-        TransferTask(CoordinatedTransfer transfer, InetAddressAndPort toHost)
+        TransferTask(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort toHost)
         {
             this.transfer = transfer;
             this.toHost = toHost;
@@ -218,7 +218,7 @@ public final class ActiveLogReconciler implements Shutdownable
             LocalTransfers.instance().executor.submit(() -> {
                 try
                 {
-                    transfer.activateOn(Collections.singleton(toHost));
+                    transfer.activate(Collections.singleton(toHost));
                     onResponse(null);
                 }
                 catch (Throwable t)

@@ -182,7 +182,7 @@ public class RepairMessageSerializationsTest extends CassandraTestBase
                                          Lists.newArrayList(new StreamSummary(TableId.fromUUID(UUID.randomUUID()), emptyList(), 5, 100)),
                                          Lists.newArrayList(new StreamSummary(TableId.fromUUID(UUID.randomUUID()), emptyList(), 500, 10))
         ));
-        SyncResponse msg = new SyncResponse(buildRepairJobDesc(), new SyncNodePair(src, dst), true, summaries);
+        SyncResponse msg = new SyncResponse(buildRepairJobDesc(), new SyncNodePair(src, dst), true, summaries, null);
         serializeRoundTrip(msg, SyncResponse.serializer);
     }
 

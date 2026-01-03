@@ -31,6 +31,7 @@ import org.apache.cassandra.repair.messages.SyncRequest;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.streaming.SessionSummary;
 import org.apache.cassandra.tracing.Tracing;
+import org.apache.cassandra.utils.TimeUUID;
 
 /**
  * SymmetricRemoteSyncTask sends {@link SyncRequest} to remote(non-coordinator) node
@@ -59,11 +60,11 @@ public class SymmetricRemoteSyncTask extends SyncTask implements CompletableRemo
         sendRequest(request, request.src);
     }
 
-    public void syncComplete(boolean success, List<SessionSummary> summaries)
+    public void syncComplete(boolean success, List<SessionSummary> summaries, TimeUUID planId)
     {
         if (success)
         {
-            trySuccess(stat.withSummaries(summaries));
+            trySuccess(stat.withSummaries(summaries, planId));
         }
         else
         {

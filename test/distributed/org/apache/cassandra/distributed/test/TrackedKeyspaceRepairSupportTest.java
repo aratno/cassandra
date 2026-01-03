@@ -19,7 +19,7 @@
 package org.apache.cassandra.distributed.test;
 
 import java.io.IOException;
-import java.time.Duration;
+import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -41,6 +41,10 @@ import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
 import org.apache.cassandra.db.ColumnFamilyStore;
+import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.dht.Murmur3Partitioner;
+import org.apache.cassandra.dht.Range;
+import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.distributed.Cluster;
 import org.apache.cassandra.distributed.api.Feature;
 import org.apache.cassandra.distributed.api.IInvokableInstance;
@@ -176,16 +180,18 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
             MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldWait.set(true));
 
             // Run full repair from COORDINATING
-            ExecutorService repairExecutor = Executors.newSingleThreadExecutor();
-            Future<NodeToolResult> failingRepair = repairExecutor.submit(() -> COORDINATING.nodetoolResult("repair", "--full", KEYSPACE));
-            Awaitility.waitAtMost(10, TimeUnit.SECONDS).pollDelay(1, TimeUnit.SECONDS)
-                      .until(() -> {
-                          int finished = StreamReceiverFailureHelper.getFinishedRepairs(RECEIVING);
-                          return finished > 0;
-                      });
-            MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldThrow.set(true));
-            failingRepair.get(10, TimeUnit.SECONDS).asserts().failure();
-            repairExecutor.shutdown();
+            {
+                ExecutorService repairExecutor = Executors.newSingleThreadExecutor();
+                Future<NodeToolResult> repair = repairExecutor.submit(() -> COORDINATING.nodetoolResult("repair", "--full", KEYSPACE));
+                Awaitility.waitAtMost(10, TimeUnit.SECONDS).pollDelay(1, TimeUnit.SECONDS)
+                          .until(() -> {
+                              int finished = StreamReceiverFailureHelper.getFinishedRepairs(RECEIVING);
+                              return finished > 0;
+                          });
+                MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldThrow.set(true));
+                repair.get(10, TimeUnit.SECONDS).asserts().failure();
+                repairExecutor.shutdown();
+            }
 
             // Even after partial repair, RECEIVED should not move its SSTable to the live set, since the repair failed
             cluster.forEach(instance -> {
@@ -217,30 +223,23 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
                 cluster.filters().inbound().to(ClusterUtils.instanceId(COORDINATING)).drop();
                 MutationTrackingReadReconciliationTest.awaitNodeDead(RECEIVING, COORDINATING);
             }
+            // Repair did not succeed sync, so it did not proceed to activation, so it's not visible on RECEIVING.
             {
-                long mark = MISSING.logs().mark();
                 Object[][] rows = RECEIVING.coordinator().execute("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1", QUORUM);
-                AssertUtils.assertRows(rows, row(1, 1));
-                List<String> logs = MISSING.logs().watchFor(mark, Duration.ofSeconds(10), "Finished activating transfer").getResult();
-                Assertions.assertThat(logs).hasSize(1);
+                AssertUtils.assertRows(rows); // empty
             }
             cluster.filters().reset();
             MutationTrackingReadReconciliationTest.awaitNodeAlive(RECEIVING, COORDINATING);
 
-            // Now all peers should agree on the local data
+            // Another repair succeeds, all peers should now agree on the local data
+            long mark = COORDINATING.logs().mark();
+            COORDINATING.nodetoolResult("repair", "--full", KEYSPACE).asserts().success();
+            List<String> logs = COORDINATING.logs().grep(mark, "Activating transfer .* on ").getResult();
+            Assertions.assertThat(logs).isNotEmpty();
             cluster.forEach(instance -> {
                 Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1");
                 AssertUtils.assertRows(rows, row(1, 1));
             });
-
-            // Run another repair, should succeed but have nothing to sync
-            {
-                long mark = COORDINATING.logs().mark();
-                NodeToolResult repair = COORDINATING.nodetoolResult("repair", "--full", KEYSPACE);
-                List<String> logs = COORDINATING.logs().watchFor(mark, Duration.ofSeconds(10), "Activating transfer .* on ").getResult();
-                Assertions.assertThat(logs).isEmpty();
-                repair.asserts().success();
-            }
 
             /*
             This test will fail periodically because the commitlog has shut down but LogStatePersister wants to update
@@ -287,6 +286,68 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
         private static int getFinishedRepairs(IInvokableInstance instance)
         {
             return instance.callOnInstance(() -> StreamReceiverFailureHelper.count.get());
+        }
+    }
+
+    // This should be aligned to a single shard: (-3074457345618258603,3074457345618258601]
+    private final static long TOKEN_VALUE = 1;
+    private final static Token TOKEN = new Murmur3Partitioner.LongToken(TOKEN_VALUE);
+    private final static ByteBuffer KEY = Murmur3Partitioner.LongToken.keyForToken(TOKEN.getLongValue());
+    private final static Range<Token> SHARD_ALIGNED_RANGE = new Range<>(new Murmur3Partitioner.LongToken(TOKEN_VALUE - 10), new Murmur3Partitioner.LongToken(TOKEN_VALUE + 10));
+    static
+    {
+        DecoratedKey reversed = Murmur3Partitioner.instance.decorateKey(TrackedKeyspaceRepairSupportTest.KEY);
+        Assertions.assertThat(reversed.getToken()).isEqualTo(TOKEN);
+    }
+
+    @Test
+    public void testFullRepairShardAlignedRangeHappyPath() throws IOException
+    {
+        testFullRepair("repair", "--start-token", SHARD_ALIGNED_RANGE.left.toString(), "--end-token", SHARD_ALIGNED_RANGE.right.toString(), "--full", KEYSPACE);
+    }
+
+    @Test
+    public void testFullRepairHappyPath() throws IOException
+    {
+        testFullRepair("repair", "--full", KEYSPACE);
+    }
+
+    public void testFullRepair(String... repairCommandAndArgs) throws IOException
+    {
+        try (Cluster cluster = Cluster.build(3)
+                                      .withConfig(cfg -> cfg.with(Feature.NETWORK)
+                                                            .with(Feature.GOSSIP)
+                                                            .set("mutation_tracking_enabled", "true"))
+                                      .start())
+        {
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='tracked';");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE_TABLE + " (pk BLOB PRIMARY KEY, v INT)");
+
+            IInvokableInstance coordinator = cluster.get(1);
+            coordinator.executeInternal("INSERT INTO " + KEYSPACE_TABLE + " (pk, v) VALUES (?, 1)", KEY);
+
+            // Why is coordinator logging "Performing validation compaction on 0 sstables"?
+
+            // Write should only be present on instance 1
+            cluster.forEach(instance -> {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE pk = ?", KEY);
+                if (ClusterUtils.instanceId(instance) == 1)
+                    AssertUtils.assertRows(rows, row(KEY, 1));
+                else
+                    AssertUtils.assertRows(rows); // empty
+            });
+
+            long mark = coordinator.logs().mark();
+            NodeToolResult result = coordinator.nodetoolResult(repairCommandAndArgs);
+            result.asserts().success();
+            List<String> logs = coordinator.logs().grep(mark, "Created 2 sync tasks based on 3 merkle tree responses").getResult();
+            Assertions.assertThat(logs).isNotEmpty();
+
+            // Write visible on all instances after repair
+            cluster.forEach(instance -> {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE pk = ?", KEY);
+                AssertUtils.assertRows(rows, row(KEY, 1));
+            });
         }
     }
 }

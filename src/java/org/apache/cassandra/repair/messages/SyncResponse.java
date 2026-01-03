@@ -31,6 +31,7 @@ import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.repair.RepairJobDesc;
 import org.apache.cassandra.repair.SyncNodePair;
 import org.apache.cassandra.streaming.SessionSummary;
+import org.apache.cassandra.utils.TimeUUID;
 
 /**
  *
@@ -45,20 +46,24 @@ public class SyncResponse extends RepairMessage
 
     public final List<SessionSummary> summaries;
 
-    public SyncResponse(RepairJobDesc desc, SyncNodePair nodes, boolean success, List<SessionSummary> summaries)
+    public final TimeUUID planId;
+
+    public SyncResponse(RepairJobDesc desc, SyncNodePair nodes, boolean success, List<SessionSummary> summaries, TimeUUID planId)
     {
         super(desc);
         this.nodes = nodes;
         this.success = success;
         this.summaries = summaries;
+        this.planId = planId;
     }
 
-    public SyncResponse(RepairJobDesc desc, InetAddressAndPort endpoint1, InetAddressAndPort endpoint2, boolean success, List<SessionSummary> summaries)
+    public SyncResponse(RepairJobDesc desc, InetAddressAndPort endpoint1, InetAddressAndPort endpoint2, boolean success, List<SessionSummary> summaries, TimeUUID planId)
     {
         super(desc);
         this.summaries = summaries;
         this.nodes = new SyncNodePair(endpoint1, endpoint2);
         this.success = success;
+        this.planId = planId;
     }
 
     @Override
@@ -70,13 +75,14 @@ public class SyncResponse extends RepairMessage
         return desc.equals(other.desc) &&
                success == other.success &&
                nodes.equals(other.nodes) &&
-               summaries.equals(other.summaries);
+               summaries.equals(other.summaries) &&
+               Objects.equals(planId, other.planId);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(desc, success, nodes, summaries);
+        return Objects.hash(desc, success, nodes, summaries, planId);
     }
 
     public static final IPartitionerDependentSerializer<SyncResponse> serializer = new IPartitionerDependentSerializer<SyncResponse>()
@@ -92,6 +98,8 @@ public class SyncResponse extends RepairMessage
             {
                 SessionSummary.serializer.serialize(summary, out, version);
             }
+
+            TimeUUID.Serializer.instance.serialize(message.planId, out);
         }
 
         @Override
@@ -108,7 +116,9 @@ public class SyncResponse extends RepairMessage
                 summaries.add(SessionSummary.serializer.deserialize(in, partitioner, version));
             }
 
-            return new SyncResponse(desc, nodes, success, summaries);
+            TimeUUID planId = TimeUUID.Serializer.instance.deserialize(in);
+
+            return new SyncResponse(desc, nodes, success, summaries, planId);
         }
 
         public long serializedSize(SyncResponse message, int version)
@@ -122,6 +132,8 @@ public class SyncResponse extends RepairMessage
             {
                 size += SessionSummary.serializer.serializedSize(summary, version);
             }
+
+            size += TimeUUID.Serializer.instance.serializedSize(message.planId);
 
             return size;
         }

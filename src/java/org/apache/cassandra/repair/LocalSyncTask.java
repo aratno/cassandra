@@ -167,7 +167,7 @@ public class LocalSyncTask extends SyncTask implements StreamEventHandler
                                            status, desc.sessionId, nodePair.coordinator, nodePair.peer, desc.columnFamily);
             logger.info("{} {}", previewKind.logPrefix(desc.sessionId), message);
             Tracing.traceRepair(message);
-            trySuccess(result.hasAbortedSession() ? stat : stat.withSummaries(result.createSummaries()));
+            trySuccess(result.hasAbortedSession() ? stat : stat.withSummaries(result.createSummaries(), result.planId));
             finished();
         }
     }

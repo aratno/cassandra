@@ -272,7 +272,7 @@ public class RepairSession extends AsyncFuture<RepairSessionResult> implements I
 
         if (logger.isDebugEnabled())
             logger.debug("{} Repair completed between {} and {} on {}", previewKind.logPrefix(getId()), nodes.coordinator, nodes.peer, desc.columnFamily);
-        task.syncComplete(message.payload.success, message.payload.summaries);
+        task.syncComplete(message.payload.success, message.payload.summaries, message.payload.planId);
     }
 
     @VisibleForTesting

@@ -23,6 +23,7 @@ import java.util.List;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.streaming.SessionSummary;
+import org.apache.cassandra.utils.TimeUUID;
 
 /**
  * Statistics about synchronizing two replica
@@ -32,21 +33,42 @@ public class SyncStat
     public final SyncNodePair nodes;
     public final Collection<Range<Token>> differences;
     public final List<SessionSummary> summaries;
+    public final TimeUUID planId;
 
     public SyncStat(SyncNodePair nodes, Collection<Range<Token>> differences)
     {
         this(nodes, differences, null);
     }
 
-    public SyncStat(SyncNodePair nodes,  Collection<Range<Token>> differences, List<SessionSummary> summaries)
+    private SyncStat(SyncNodePair nodes,  Collection<Range<Token>> differences, List<SessionSummary> summaries)
     {
         this.nodes = nodes;
         this.summaries = summaries;
         this.differences = differences;
+        this.planId = null;
     }
 
-    public SyncStat withSummaries(List<SessionSummary> summaries)
+    private SyncStat(SyncNodePair nodes,  Collection<Range<Token>> differences, List<SessionSummary> summaries, TimeUUID planId)
     {
-        return new SyncStat(nodes, differences, summaries);
+        this.nodes = nodes;
+        this.summaries = summaries;
+        this.differences = differences;
+        this.planId = planId;
+    }
+
+    public SyncStat withSummaries(List<SessionSummary> summaries, TimeUUID planId)
+    {
+        return new SyncStat(nodes, differences, summaries, planId);
+    }
+
+    @Override
+    public String toString()
+    {
+        return "SyncStat{" +
+               "nodes=" + nodes +
+               ", differences=" + differences +
+               ", summaries=" + summaries +
+               ", planId=" + planId +
+               '}';
     }
 }

@@ -21,8 +21,9 @@ package org.apache.cassandra.repair;
 import java.util.List;
 
 import org.apache.cassandra.streaming.SessionSummary;
+import org.apache.cassandra.utils.TimeUUID;
 
 public interface CompletableRemoteSyncTask
 {
-    void syncComplete(boolean success, List<SessionSummary> summaries);
+    void syncComplete(boolean success, List<SessionSummary> summaries, TimeUUID planId);
 }

@@ -166,7 +166,8 @@ public class PendingLocalTransfer
         // Ensure no lingering mutation IDs, only activation IDs
         for (SSTableReader sstable : sstables)
         {
-            Preconditions.checkState(sstable.getCoordinatorLogOffsets().mutations().isEmpty());
+            // For TrackedImportTransfer, CLO should be empty, but for TrackedRepairSyncTransfer, can have CLOs
+            // Preconditions.checkState(sstable.getCoordinatorLogOffsets().mutations().isEmpty());
             try
             {
                 sstable.mutateCoordinatorLogOffsetsAndReload(logOffsets);
