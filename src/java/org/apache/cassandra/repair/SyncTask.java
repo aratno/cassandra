@@ -18,6 +18,7 @@
 
 package org.apache.cassandra.repair;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -66,6 +67,12 @@ public abstract class SyncTask extends AsyncFuture<SyncStat> implements Runnable
     }
 
     protected abstract void startSync();
+
+    /**
+     * Creates a new SyncTask with the same parameters but different ranges.
+     * Used for splitting sync tasks on shard boundaries.
+     */
+    public abstract SyncTask withRanges(Collection<Range<Token>> newRanges);
 
     public SyncNodePair nodePair()
     {

@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,6 +58,7 @@ import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.RequestFailure;
 import org.apache.cassandra.gms.FailureDetector;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.locator.EndpointsForRange;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
@@ -68,6 +70,7 @@ import org.apache.cassandra.schema.SchemaConstants;
 import org.apache.cassandra.schema.TableId;
 import org.apache.cassandra.service.reads.tracked.TrackedLocalReads;
 import org.apache.cassandra.tcm.ClusterMetadata;
+import org.apache.cassandra.tcm.Epoch;
 import org.apache.cassandra.tcm.membership.NodeId;
 import org.apache.cassandra.tcm.ClusterMetadataService;
 import org.apache.cassandra.tcm.listeners.ChangeListener;
@@ -781,6 +784,44 @@ public class MutationTrackingService
         forEachKeyspace(keyspace -> keyspace.collectDurablyReconciledOffsets(into));
     }
 
+    /**
+     * Splits the given ranges so that each resulting group of ranges falls within a single shard.
+     * <p>
+     * This is used during repair to ensure that sync tasks operate within shard boundaries,
+     * which is required for tracked keyspaces where mutation tracking is shard-based.
+     *
+     * @param keyspace the keyspace name
+     * @param ranges the ranges to align with shard boundaries
+     * @return a list of range lists, where each inner list contains ranges within a single shard
+     */
+    public List<List<Range<Token>>> alignedToShardBoundaries(String keyspace, Collection<Range<Token>> ranges)
+    {
+        KeyspaceShards ks = keyspaceShards.get(keyspace);
+        if (ks == null)
+        {
+            // No shards for this keyspace, return ranges as a single group
+            return Collections.singletonList(new ArrayList<>(ranges));
+        }
+
+        // Group ranges by the shard they fall into after splitting
+        Map<Range<Token>, List<Range<Token>>> rangesByShard = new LinkedHashMap<>();
+
+        for (Range<Token> range : ranges)
+        {
+            // Find all shard ranges that intersect with this range
+            for (Range<Token> shardRange : ks.shards.keySet())
+            {
+                Set<Range<Token>> intersections = range.intersectionWith(shardRange);
+                for (Range<Token> intersection : intersections)
+                {
+                    rangesByShard.computeIfAbsent(shardRange, k -> new ArrayList<>()).add(intersection);
+                }
+            }
+        }
+
+        return new ArrayList<>(rangesByShard.values());
+    }
+
     public static class KeyspaceShards
     {
         private enum UpdateDecision
@@ -1224,6 +1265,35 @@ public class MutationTrackingService
         public static KeyspaceShards getKeyspaceShards(MutationTrackingService service, String keyspace)
         {
             return service.keyspaceShards.get(keyspace);
+        }
+
+        /**
+         * Creates a test KeyspaceShards with the given shard ranges.
+         * The shards are created with minimal configuration suitable for testing.
+         */
+        public static KeyspaceShards createTestKeyspaceShards(String keyspace, Set<Range<Token>> shardRanges)
+        {
+            Map<Range<Token>, Shard> shards = new HashMap<>();
+            Map<Range<Token>, VersionedEndpoints.ForRange> groups = new HashMap<>();
+
+            int localNodeId = 1;
+            LongSupplier logId = () -> CoordinatorLogId.asLong(localNodeId, 1);
+            Participants participants = new Participants(List.of(localNodeId));
+            for (Range<Token> range : shardRanges)
+            {
+                shards.put(range, new Shard(localNodeId, keyspace, range, participants, logId, (s, l) -> {}));
+                groups.put(range, VersionedEndpoints.forRange(Epoch.EMPTY, EndpointsForRange.empty(range)));
+            }
+
+            return new KeyspaceShards(keyspace, shards, new ReplicaGroups(groups));
+        }
+
+        /**
+         * Sets the keyspace shards for testing purposes.
+         */
+        public static void setKeyspaceShards(MutationTrackingService service, String keyspace, KeyspaceShards shards)
+        {
+            service.keyspaceShards.put(keyspace, shards);
         }
     }
 }

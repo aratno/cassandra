@@ -307,7 +307,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
     }
 
     @Test
-    public void testFullRepairHappyPath() throws IOException
+    public void testFullRepairAcrossShardsHappyPath() throws IOException
     {
         testFullRepair("repair", "--full", KEYSPACE);
     }
@@ -325,8 +325,6 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
 
             IInvokableInstance coordinator = cluster.get(1);
             coordinator.executeInternal("INSERT INTO " + KEYSPACE_TABLE + " (pk, v) VALUES (?, 1)", KEY);
-
-            // Why is coordinator logging "Performing validation compaction on 0 sstables"?
 
             // Write should only be present on instance 1
             cluster.forEach(instance -> {

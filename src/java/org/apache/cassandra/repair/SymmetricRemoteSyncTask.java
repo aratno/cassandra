@@ -17,6 +17,8 @@
  */
 package org.apache.cassandra.repair;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 import com.google.common.base.Preconditions;
@@ -46,6 +48,16 @@ public class SymmetricRemoteSyncTask extends SyncTask implements CompletableRemo
     public SymmetricRemoteSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort r1, InetAddressAndPort r2, List<Range<Token>> differences, PreviewKind previewKind)
     {
         super(ctx, desc, r1, r2, differences, previewKind);
+    }
+
+    @Override
+    public SyncTask withRanges(Collection<Range<Token>> newRanges)
+    {
+        List<Range<Token>> rangeList = newRanges instanceof List
+                                       ? (List<Range<Token>>) newRanges
+                                       : new ArrayList<>(newRanges);
+        return new SymmetricRemoteSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer,
+                                           rangeList, previewKind);
     }
 
     @Override

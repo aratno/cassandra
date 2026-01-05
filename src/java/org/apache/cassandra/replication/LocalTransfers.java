@@ -19,6 +19,7 @@
 package org.apache.cassandra.replication;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -130,10 +131,23 @@ public class LocalTransfers
      */
     public void onRepairSyncExecution(RepairJob job, RepairJobDesc desc, Collection<SyncTask> tasks)
     {
-        ShortMutationId id = job.getTransferId();
-        Preconditions.checkNotNull(id);
-        TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(id, desc, tasks);
-        coordinating.put(transfer.id(), transfer);
+        /*
+        We need to fit each task into its shard,
+        */
+
+        // One RepairJob may have multiple TrackedRepairSyncTransfers, if it spans across shards. Register each of these
+        // as a separate transfer.
+        Map<ShortMutationId, TrackedRepairSyncTransfer.Builder> transfers = new HashMap<>();
+        for (SyncTask task : tasks)
+        {
+            ShortMutationId id = task.transferId();
+            transfers.computeIfAbsent(id, TrackedRepairSyncTransfer.builder(id));
+        }
+        for (TrackedRepairSyncTransfer.Builder builder : transfers.values())
+        {
+            TrackedRepairSyncTransfer transfer = builder.build();
+            coordinating.put(transfer.id(), transfer);
+        }
     }
 
     /**

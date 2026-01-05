@@ -43,7 +43,16 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
     public TrackedRepairSyncTransfer(ShortMutationId id, RepairJobDesc desc, Collection<SyncTask> tasks)
     {
         super(id);
+        /*
+        We need to update transfer ID generation to happen after tasks are split, instead of at RepairJob construction
+        time. All the IDs for a transfer should be tracked in TrackedRepairSyncTransfer so we can activate them all
+        later.
+        */
     }
+
+    /*
+    Should call LocalTransfers.instance().save(this) once the RepairJob starts streaming
+    */
 
     public void activate(List<SyncStat> syncs)
     {
@@ -57,8 +66,4 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
 
         activate(streamResults.keySet());
     }
-
-    /*
-    Should call LocalTransfers.instance().save(this) once the RepairJob starts streaming
-    */
 }

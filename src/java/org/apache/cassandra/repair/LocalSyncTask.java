@@ -17,6 +17,8 @@
  */
 package org.apache.cassandra.repair;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -75,6 +77,16 @@ public class LocalSyncTask extends SyncTask implements StreamEventHandler
         this.pendingRepair = pendingRepair;
         this.requestRanges = requestRanges;
         this.transferRanges = transferRanges;
+    }
+
+    @Override
+    public SyncTask withRanges(Collection<Range<Token>> newRanges)
+    {
+        List<Range<Token>> rangeList = newRanges instanceof List
+                                       ? (List<Range<Token>>) newRanges
+                                       : new ArrayList<>(newRanges);
+        return new LocalSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer,
+                                 rangeList, pendingRepair, requestRanges, transferRanges, previewKind);
     }
 
     @VisibleForTesting

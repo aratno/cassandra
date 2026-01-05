@@ -21,10 +21,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
@@ -51,7 +53,6 @@ import org.apache.cassandra.repair.asymmetric.PreferedNodeFilter;
 import org.apache.cassandra.repair.asymmetric.ReduceHelper;
 import org.apache.cassandra.repair.state.JobState;
 import org.apache.cassandra.replication.LocalTransfers;
-import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.replication.MutationTrackingService;
 import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.schema.SystemDistributedKeyspace;
@@ -101,7 +102,10 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
     @VisibleForTesting
     final List<SyncTask> syncTasks = new CopyOnWriteArrayList<>();
 
-    private final MutationId transferId;
+    /*
+    A RepairJob may have multiple transfer IDs if it spans shards.
+    */
+    private Set<ShortMutationId> transferIds = null;
 
     /**
      * Create repair job to run on specific columnfamily
@@ -127,9 +131,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
             throw new IllegalArgumentException(String.format("Cannot run accord only repair on %s.%s, which isn't configured for accord operations", cfs.keyspace.getName(), cfs.name));
 
         if (cfs.metadata().replicationType().isTracked())
-            transferId = MutationTrackingService.instance.nextMutationId(desc.keyspace, desc.ranges);
-        else
-            transferId = null;
+            transferIds = new HashSet<>(1);
     }
 
     public long getNowInSeconds()
@@ -145,9 +147,9 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         }
     }
 
-    public ShortMutationId getTransferId()
+    public Set<ShortMutationId> getTransferIds()
     {
-        return transferId;
+        return transferIds;
     }
 
     @Override
@@ -273,7 +275,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
             boolean isTracked = cfs.metadata().replicationType().isTracked();
             if (isTracked)
             {
-                Preconditions.checkState(transferId != null);
+                Preconditions.checkState(transferIds != null && !transferIds.isEmpty());
                 LocalTransfers.instance().onRepairSyncCompletion(this, syncResults, taskExecutor);
             }
         }
@@ -351,9 +353,35 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
             return a;
         });
 
-        return treeResponses.map(session.optimiseStreams && !session.pullRepair
-                                 ? this::createOptimisedSyncingSyncTasks
-                                 : this::createStandardSyncTasks, taskExecutor);
+        return treeResponses.map(trees -> {
+            List<SyncTask> syncTasks;
+            if (session.optimiseStreams && !session.pullRepair)
+                syncTasks = createOptimisedSyncingSyncTasks(trees);
+            else
+                syncTasks = createStandardSyncTasks(trees);
+            return splitOnShardBoundaries(syncTasks);
+        }, taskExecutor);
+    }
+
+    /**
+     * Mutation Tracking manages tracking metadata within shards that are each responsible for a piece of the owned
+     * token space. Executing a full repair across an entire node's ownership will span multiple shards, so repair sync
+     * tasks need to be split to each align within a single tracking shard.
+     */
+    private List<SyncTask> splitOnShardBoundaries(List<SyncTask> syncTasks)
+    {
+        Keyspace keyspace = Keyspace.open(desc.keyspace);
+        if (keyspace == null || !keyspace.getMetadata().params.replicationType.isTracked())
+            return syncTasks;
+
+        List<SyncTask> splitTasks = new ArrayList<>(syncTasks.size());
+        for (SyncTask syncTask : syncTasks)
+        {
+            List<List<Range<Token>>> split = MutationTrackingService.instance.alignedToShardBoundaries(desc.keyspace, syncTask.rangesToSync);
+            for (List<Range<Token>> ranges : split)
+                splitTasks.add(syncTask.withRanges(ranges));
+        }
+        return splitTasks;
     }
 
     public synchronized void abort(@Nullable Throwable reason)

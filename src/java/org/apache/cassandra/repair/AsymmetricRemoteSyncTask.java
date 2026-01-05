@@ -18,6 +18,8 @@
 
 package org.apache.cassandra.repair;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 
@@ -42,6 +44,16 @@ public class AsymmetricRemoteSyncTask extends SyncTask implements CompletableRem
     public AsymmetricRemoteSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort to, InetAddressAndPort from, List<Range<Token>> differences, PreviewKind previewKind)
     {
         super(ctx, desc, to, from, differences, previewKind);
+    }
+
+    @Override
+    public SyncTask withRanges(Collection<Range<Token>> newRanges)
+    {
+        List<Range<Token>> rangeList = newRanges instanceof List
+                                       ? (List<Range<Token>>) newRanges
+                                       : new ArrayList<>(newRanges);
+        return new AsymmetricRemoteSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer,
+                                            rangeList, previewKind);
     }
 
     public void startSync()
