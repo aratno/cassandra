@@ -18,6 +18,7 @@
 
 package org.apache.cassandra.replication;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +36,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.concurrent.ExecutorPlus;
+import org.apache.cassandra.dht.Range;
+import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.File;
 import org.apache.cassandra.net.IVerbHandler;
@@ -131,27 +134,28 @@ public class LocalTransfers
      */
     public void onRepairSyncExecution(RepairJob job, RepairJobDesc desc, Collection<SyncTask> tasks)
     {
-        /*
-        We need to fit each task into its shard,
-        */
-
-        // One RepairJob may have multiple TrackedRepairSyncTransfers, if it spans across shards. Register each of these
-        // as a separate transfer.
-        Map<ShortMutationId, TrackedRepairSyncTransfer.Builder> transfers = new HashMap<>();
+        // One RepairJob may have multiple TrackedRepairSyncTransfers, if it spans across shards.
+        // Group tasks by their transfer ID and create one TrackedRepairSyncTransfer per unique ID.
+        Map<ShortMutationId, List<SyncTask>> tasksByTransferId = new HashMap<>();
         for (SyncTask task : tasks)
         {
-            ShortMutationId id = task.transferId();
-            transfers.computeIfAbsent(id, TrackedRepairSyncTransfer.builder(id));
+            MutationId transferId = task.getTransferId();
+            if (transferId != null)
+                tasksByTransferId.computeIfAbsent(transferId, k -> new ArrayList<>()).add(task);
         }
-        for (TrackedRepairSyncTransfer.Builder builder : transfers.values())
+
+        // Create and register a TrackedRepairSyncTransfer for each unique transfer ID
+        for (Map.Entry<ShortMutationId, List<SyncTask>> entry : tasksByTransferId.entrySet())
         {
-            TrackedRepairSyncTransfer transfer = builder.build();
-            coordinating.put(transfer.id(), transfer);
+            ShortMutationId transferId = entry.getKey();
+            List<SyncTask> tasksForTransfer = entry.getValue();
+            TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(transferId, desc, tasksForTransfer);
+            coordinating.put(transferId, transfer);
         }
     }
 
     /**
-     * Begin activation for the sync'd transfer
+     * Begin activation for the sync'd transfer(s)
      */
     public void onRepairSyncCompletion(RepairJob job, Future<List<SyncStat>> syncCompletion, Executor executor)
     {
@@ -166,13 +170,39 @@ public class LocalTransfers
                 {
                     logger.info("maybeActivate onSuccess {} {} {}", syncs, coordinating, local);
 
-                    /*
-                    In order to send an activation to a peer, we need to know the streaming planId
-                    */
-                    AbstractCoordinatedBulkTransfer transfer0 = coordinating.get(job.getTransferId());
-                    Preconditions.checkState(transfer0 instanceof TrackedRepairSyncTransfer);
-                    TrackedRepairSyncTransfer transfer = (TrackedRepairSyncTransfer) transfer0;
-                    transfer.activate(syncs);
+                    // Collect all unique transfer IDs from the job's sync tasks
+                    Map<MutationId, List<SyncStat>> syncsByTransferId = new HashMap<>();
+
+                    // Build a map of sync task ranges to their transfer IDs for lookup
+                    Map<Collection<Range<Token>>, MutationId> rangeToTransferId = new HashMap<>();
+                    for (SyncTask task : job.getSyncTasks())
+                    {
+                        MutationId transferId = task.getTransferId();
+                        if (transferId != null)
+                            rangeToTransferId.put(task.rangesToSync, transferId);
+                    }
+
+                    // Group sync stats by transfer ID based on their ranges
+                    for (SyncStat sync : syncs)
+                    {
+                        MutationId transferId = rangeToTransferId.get(sync.differences);
+                        if (transferId != null)
+                            syncsByTransferId.computeIfAbsent(transferId, k -> new ArrayList<>()).add(sync);
+                    }
+
+                    // Activate each transfer with its corresponding sync stats
+                    for (Map.Entry<MutationId, List<SyncStat>> entry : syncsByTransferId.entrySet())
+                    {
+                        MutationId transferId = entry.getKey();
+                        List<SyncStat> syncsForTransfer = entry.getValue();
+
+                        AbstractCoordinatedBulkTransfer transfer0 = coordinating.get(transferId);
+                        Preconditions.checkState(transfer0 instanceof TrackedRepairSyncTransfer,
+                                                 "Expected TrackedRepairSyncTransfer for %s but got %s",
+                                                 transferId, transfer0);
+                        TrackedRepairSyncTransfer transfer = (TrackedRepairSyncTransfer) transfer0;
+                        transfer.activate(syncsForTransfer);
+                    }
                 }
                 finally
                 {

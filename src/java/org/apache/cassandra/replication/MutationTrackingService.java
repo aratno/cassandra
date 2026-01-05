@@ -822,6 +822,39 @@ public class MutationTrackingService
         return new ArrayList<>(rangesByShard.values());
     }
 
+    /**
+     * Returns the shard range that contains all the given ranges.
+     * Requires that all ranges fall within a single shard.
+     *
+     * @param keyspace the keyspace name
+     * @param ranges the ranges to look up
+     * @return the shard's token range
+     */
+    public Range<Token> getShardRangeForRanges(String keyspace, Collection<Range<Token>> ranges)
+    {
+        KeyspaceShards ks = keyspaceShards.get(keyspace);
+        if (ks == null)
+            throw new IllegalStateException("No shards found for keyspace " + keyspace);
+
+        Preconditions.checkArgument(!ranges.isEmpty(), "Cannot determine shard for empty range list");
+
+        // Look up the shard for the first range
+        Shard shard = ks.lookUp(ranges.iterator().next());
+        Range<Token> shardRange = shard.range;
+
+        // Verify all ranges belong to the same shard
+        for (Range<Token> range : ranges)
+        {
+            Shard rangeShard = ks.lookUp(range);
+            if (!rangeShard.range.equals(shardRange))
+                throw new IllegalArgumentException(
+                    String.format("Ranges %s span multiple shards (%s and %s)",
+                                  ranges, shardRange, rangeShard.range));
+        }
+
+        return shardRange;
+    }
+
     public static class KeyspaceShards
     {
         private enum UpdateDecision

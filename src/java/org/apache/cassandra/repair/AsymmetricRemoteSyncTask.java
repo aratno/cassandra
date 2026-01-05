@@ -28,6 +28,7 @@ import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.RepairException;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.repair.messages.SyncRequest;
+import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.streaming.SessionSummary;
 import org.apache.cassandra.tracing.Tracing;
@@ -41,19 +42,19 @@ import org.apache.cassandra.utils.TimeUUID;
  */
 public class AsymmetricRemoteSyncTask extends SyncTask implements CompletableRemoteSyncTask
 {
-    public AsymmetricRemoteSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort to, InetAddressAndPort from, List<Range<Token>> differences, PreviewKind previewKind)
+    public AsymmetricRemoteSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort to, InetAddressAndPort from, List<Range<Token>> differences, PreviewKind previewKind, MutationId transferId)
     {
-        super(ctx, desc, to, from, differences, previewKind);
+        super(ctx, desc, to, from, differences, previewKind, transferId);
     }
 
     @Override
-    public SyncTask withRanges(Collection<Range<Token>> newRanges)
+    public SyncTask withRanges(Collection<Range<Token>> newRanges, MutationId transferId)
     {
         List<Range<Token>> rangeList = newRanges instanceof List
                                        ? (List<Range<Token>>) newRanges
                                        : new ArrayList<>(newRanges);
         return new AsymmetricRemoteSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer,
-                                            rangeList, previewKind);
+                                            rangeList, previewKind, transferId);
     }
 
     public void startSync()

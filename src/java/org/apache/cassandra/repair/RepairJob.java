@@ -21,12 +21,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
-import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
@@ -37,6 +36,7 @@ import javax.annotation.Nullable;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.FutureCallback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,7 +54,7 @@ import org.apache.cassandra.repair.asymmetric.ReduceHelper;
 import org.apache.cassandra.repair.state.JobState;
 import org.apache.cassandra.replication.LocalTransfers;
 import org.apache.cassandra.replication.MutationTrackingService;
-import org.apache.cassandra.replication.ShortMutationId;
+import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.schema.SystemDistributedKeyspace;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.accord.IAccordService;
@@ -102,11 +102,6 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
     @VisibleForTesting
     final List<SyncTask> syncTasks = new CopyOnWriteArrayList<>();
 
-    /*
-    A RepairJob may have multiple transfer IDs if it spans shards.
-    */
-    private Set<ShortMutationId> transferIds = null;
-
     /**
      * Create repair job to run on specific columnfamily
      *  @param session RepairSession that this RepairJob belongs
@@ -129,9 +124,6 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
 
         if ((!session.repairData && !session.repairPaxos) && !metadata.requiresAccordSupport())
             throw new IllegalArgumentException(String.format("Cannot run accord only repair on %s.%s, which isn't configured for accord operations", cfs.keyspace.getName(), cfs.name));
-
-        if (cfs.metadata().replicationType().isTracked())
-            transferIds = new HashSet<>(1);
     }
 
     public long getNowInSeconds()
@@ -147,9 +139,9 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         }
     }
 
-    public Set<ShortMutationId> getTransferIds()
+    public Collection<SyncTask> getSyncTasks()
     {
-        return transferIds;
+        return syncTasks;
     }
 
     @Override
@@ -275,7 +267,6 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
             boolean isTracked = cfs.metadata().replicationType().isTracked();
             if (isTracked)
             {
-                Preconditions.checkState(transferIds != null && !transferIds.isEmpty());
                 LocalTransfers.instance().onRepairSyncCompletion(this, syncResults, taskExecutor);
             }
         }
@@ -374,12 +365,29 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         if (keyspace == null || !keyspace.getMetadata().params.replicationType.isTracked())
             return syncTasks;
 
+        // Track transfer IDs by shard range to avoid generating duplicates
+        Map<Range<Token>, MutationId> transferIdsByShard = new HashMap<>();
         List<SyncTask> splitTasks = new ArrayList<>(syncTasks.size());
+
         for (SyncTask syncTask : syncTasks)
         {
             List<List<Range<Token>>> split = MutationTrackingService.instance.alignedToShardBoundaries(desc.keyspace, syncTask.rangesToSync);
             for (List<Range<Token>> ranges : split)
-                splitTasks.add(syncTask.withRanges(ranges));
+            {
+                // Determine which shard these ranges belong to
+                Range<Token> shardRange = MutationTrackingService.instance.getShardRangeForRanges(desc.keyspace, ranges);
+
+                // Generate transfer ID for this shard if we haven't already
+                MutationId transferId = transferIdsByShard.get(shardRange);
+                if (transferId == null)
+                {
+                    transferId = MutationTrackingService.instance.nextMutationId(desc.keyspace, ranges);
+                    transferIdsByShard.put(shardRange, transferId);
+                }
+
+                // Create split task with the transfer ID
+                splitTasks.add(syncTask.withRanges(ranges, transferId));
+            }
         }
         return splitTasks;
     }
@@ -462,18 +470,18 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
                         continue;
 
                     task = new LocalSyncTask(ctx, desc, self.endpoint, remote.endpoint, differences, isIncremental ? desc.parentSessionId : null,
-                                             requestRanges, transferRanges, previewKind);
+                                             requestRanges, transferRanges, previewKind, null);
                 }
                 else if (isTransient.test(r1.endpoint) || isTransient.test(r2.endpoint))
                 {
                     // Stream only from transient replica
                     TreeResponse streamFrom = isTransient.test(r1.endpoint) ? r1 : r2;
                     TreeResponse streamTo = isTransient.test(r1.endpoint) ? r2 : r1;
-                    task = new AsymmetricRemoteSyncTask(ctx, desc, streamTo.endpoint, streamFrom.endpoint, differences, previewKind);
+                    task = new AsymmetricRemoteSyncTask(ctx, desc, streamTo.endpoint, streamFrom.endpoint, differences, previewKind, null);
                 }
                 else
                 {
-                    task = new SymmetricRemoteSyncTask(ctx, desc, r1.endpoint, r2.endpoint, differences, previewKind);
+                    task = new SymmetricRemoteSyncTask(ctx, desc, r1.endpoint, r2.endpoint, differences, previewKind, null);
                 }
                 syncTasks.add(task);
             }
@@ -587,11 +595,11 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
                     if (address.equals(local))
                     {
                         task = new LocalSyncTask(ctx, desc, address, fetchFrom, toFetch, isIncremental ? desc.parentSessionId : null,
-                                                 true, false, previewKind);
+                                                 true, false, previewKind, null);
                     }
                     else
                     {
-                        task = new AsymmetricRemoteSyncTask(ctx, desc, address, fetchFrom, toFetch, previewKind);
+                        task = new AsymmetricRemoteSyncTask(ctx, desc, address, fetchFrom, toFetch, previewKind, null);
                     }
                     syncTasks.add(task);
 
