@@ -20,6 +20,7 @@ package org.apache.cassandra.distributed.test;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -42,6 +43,7 @@ import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
 import net.bytebuddy.implementation.bind.annotation.SuperCall;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.streaming.CassandraStreamReceiver;
 import org.apache.cassandra.dht.Murmur3Partitioner;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -53,6 +55,7 @@ import org.apache.cassandra.distributed.shared.AssertUtils;
 import org.apache.cassandra.distributed.shared.ClusterUtils;
 import org.apache.cassandra.distributed.test.tracking.MutationTrackingReadReconciliationTest;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
+import org.apache.cassandra.io.util.File;
 import org.assertj.core.api.Assertions;
 import org.awaitility.Awaitility;
 
@@ -146,6 +149,8 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
             roundabout write path. Once the mutation has completed and is repaired on the coordinator, it's been
             (durably) reconciled on all replicas. Then, drop this SSTable on the other peers and we should have a full
             repair digest mismatch.
+
+            The idea here is to emulate logical data corruption, where SSTables mismatch but the logs are in agreement.
             */
             COORDINATING.coordinator().execute("INSERT INTO " + KEYSPACE_TABLE + " (k, v) " + "VALUES (?, ?)", ALL, 1, 1);
             COORDINATING.flush(KEYSPACE);
@@ -257,11 +262,11 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
         static AtomicInteger count = new AtomicInteger(0);
 
         /**
-         * {@link org.apache.cassandra.db.streaming.CassandraStreamReceiver#finished}
+         * {@link CassandraStreamReceiver#finished}
          */
         public static void install(ClassLoader classLoader, Integer instanceNum)
         {
-            new ByteBuddy().rebase(org.apache.cassandra.db.streaming.CassandraStreamReceiver.class)
+            new ByteBuddy().rebase(CassandraStreamReceiver.class)
                            .method(named("finished").and(takesNoArguments()))
                            .intercept(to(StreamReceiverFailureHelper.class))
                            .make()
@@ -287,6 +292,98 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
         {
             return instance.callOnInstance(() -> StreamReceiverFailureHelper.count.get());
         }
+    }
+
+    @Test
+    public void testFullRepairCleanupOnFailure() throws IOException, ExecutionException, InterruptedException, TimeoutException
+    {
+        try (Cluster cluster = Cluster.build(3)
+                                      .withInstanceInitializer(StreamReceiverFailureHelper::install)
+                                      .withConfig(cfg -> cfg
+                                                         .with(Feature.NETWORK)
+                                                         .with(Feature.GOSSIP)
+                                                         .set("mutation_tracking_enabled", "true")
+                                                         .set("repair_request_timeout", "5s")
+                                                         .set("repair.retries.max_attempts", "1"))
+                                      .start())
+        {
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='tracked';");
+            String TABLE_SCHEMA_CQL = "CREATE TABLE " + KEYSPACE + '.' + TABLE + " (k INT PRIMARY KEY, v INT)";
+            cluster.schemaChange(TABLE_SCHEMA_CQL);
+
+            IInvokableInstance COORDINATING = cluster.get(1);
+            IInvokableInstance RECEIVING = cluster.get(2);
+            IInvokableInstance MISSING = cluster.get(3);
+
+            // Write a single row to COORDINATING node only
+            COORDINATING.executeInternal("INSERT INTO " + KEYSPACE_TABLE + " (k, v) VALUES (?, ?)", 1, 100);
+
+            // Before repair, only COORDINATING has data
+            for (IInvokableInstance instance : cluster)
+            {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE k = 1");
+                if (instance == COORDINATING)
+                    AssertUtils.assertRows(rows, row(1, 100));
+                else
+                    AssertUtils.assertRows(rows); // empty
+            }
+
+            // Prevent repair stream from completing
+            MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldWait.set(true));
+
+            // Run full repair from COORDINATING
+            {
+                ExecutorService repairExecutor = Executors.newSingleThreadExecutor();
+                Future<NodeToolResult> repair = repairExecutor.submit(() -> COORDINATING.nodetoolResult("repair", "--full", KEYSPACE));
+                Awaitility.waitAtMost(10, TimeUnit.SECONDS).pollDelay(1, TimeUnit.SECONDS)
+                          .until(() -> {
+                              int finished = StreamReceiverFailureHelper.getFinishedRepairs(RECEIVING);
+                              return finished > 0;
+                          });
+
+                // Repair completed against RECEIVING, so it should have pending SSTables
+                {
+                    List<String> pending = getPendingSSTablePaths(RECEIVING);
+                    Assertions.assertThat(pending).isNotEmpty();
+                }
+
+                MISSING.runOnInstance(() -> StreamReceiverFailureHelper.shouldThrow.set(true));
+                repair.get(10, TimeUnit.SECONDS).asserts().failure();
+                repairExecutor.shutdown();
+            }
+
+            // No pending SSTables on COORDINATING because they're streamed from the live set
+            // No pending SSTables on MISSING because of stream failure injection
+            // No pending SSTables on RECEIVING because they were cleaned up when the repair failed
+            for (IInvokableInstance instance : cluster)
+            {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE k = 1");
+                if (instance == COORDINATING)
+                    AssertUtils.assertRows(rows, row(1, 100));
+                else
+                    AssertUtils.assertRows(rows); // empty
+
+                List<String> pending = getPendingSSTablePaths(instance);
+                Assertions.assertThat(pending).isEmpty();
+            }
+        }
+    }
+
+    private static List<String> getPendingSSTablePaths(IInvokableInstance instance)
+    {
+        return instance.callOnInstance(() -> {
+            ColumnFamilyStore cfs = ColumnFamilyStore.getIfExists(KEYSPACE, TABLE);
+            Set<File> pendingLocations = cfs.getDirectories().getPendingLocations();
+
+            List<String> pendingUuidDirs = new ArrayList<>();
+            for (File pendingDir : pendingLocations)
+            {
+                File[] uuidDirs = pendingDir.listUnchecked(File::isDirectory);
+                for (File dir : uuidDirs)
+                    pendingUuidDirs.add(dir.absolutePath());
+            }
+            return pendingUuidDirs;
+        });
     }
 
     // This should be aligned to a single shard: (-3074457345618258603,3074457345618258601]
