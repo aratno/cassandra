@@ -21,8 +21,10 @@ package org.apache.cassandra.replication;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -40,6 +42,7 @@ import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.File;
+import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.NoPayload;
@@ -149,7 +152,7 @@ public class LocalTransfers
         {
             ShortMutationId transferId = entry.getKey();
             List<SyncTask> tasksForTransfer = entry.getValue();
-            TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(transferId, desc, tasksForTransfer);
+            TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(transferId, tasksForTransfer);
             coordinating.put(transferId, transfer);
         }
     }
@@ -213,7 +216,47 @@ public class LocalTransfers
             @Override
             public void onFailure(Throwable t)
             {
-                logger.info("maybeActivate onFailure", t);
+                logger.info("maybeActivate onFailure - cleaning up pending transfers", t);
+
+                lock.writeLock().lock();
+                try
+                {
+                    Set<MutationId> transferIds = new HashSet<>();
+                    for (SyncTask task : job.getSyncTasks())
+                    {
+                        MutationId transferId = task.getTransferId();
+                        Preconditions.checkNotNull(transferId);
+                        transferIds.add(transferId);
+
+                        TimeUUID planId = task.getPlanId();
+                        if (planId == null)
+                            continue;
+
+                        AbstractCoordinatedBulkTransfer transfer = coordinating.get(transferId);
+                        InetAddressAndPort peer = task.nodePair().peer;
+                        logger.debug("{} Task for peer {} has planId {}, updating streamResults", transfer.logPrefix(), peer, planId);
+                        transfer.streamResults.put(peer, AbstractCoordinatedBulkTransfer.SingleTransferResult.Init().streamFailed(planId));
+                    }
+
+                    for (MutationId transferId : transferIds)
+                    {
+                        AbstractCoordinatedBulkTransfer transfer = coordinating.get(transferId);
+                        try
+                        {
+                            transfer.notifyFailure();
+                        }
+                        catch (Throwable t0)
+                        {
+                            logger.error("{} Failed to notify peers of repair failure", transfer, t0);
+                        }
+                    }
+
+                    scheduleCleanup();
+                }
+                finally
+                {
+                    lock.writeLock().unlock();
+                }
             }
         }, executor);
     }

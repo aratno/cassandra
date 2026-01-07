@@ -44,15 +44,9 @@ import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.streaming.CassandraOutgoingFile;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
-import org.apache.cassandra.exceptions.RequestFailure;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.apache.cassandra.locator.InetAddressAndPort;
-import org.apache.cassandra.net.Message;
-import org.apache.cassandra.net.MessagingService;
-import org.apache.cassandra.net.NoPayload;
-import org.apache.cassandra.net.RequestCallbackWithFailure;
-import org.apache.cassandra.net.Verb;
 import org.apache.cassandra.streaming.OutgoingStream;
 import org.apache.cassandra.streaming.StreamException;
 import org.apache.cassandra.streaming.StreamOperation;
@@ -61,10 +55,8 @@ import org.apache.cassandra.streaming.StreamResultFuture;
 import org.apache.cassandra.streaming.StreamState;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.tcm.membership.NodeId;
-import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.TimeUUID;
-import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import static org.apache.cassandra.replication.AbstractCoordinatedBulkTransfer.SingleTransferResult.State.COMMITTED;
@@ -233,50 +225,6 @@ public class TrackedImportTransfer extends AbstractCoordinatedBulkTransfer
             Throwable cause = e instanceof ExecutionException ? e.getCause() : e;
             throw Throwables.unchecked(cause);
         }
-    }
-
-    private void notifyFailure() throws ExecutionException, InterruptedException
-    {
-        class NotifyFailure extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
-        {
-            final Set<InetAddressAndPort> responses = ConcurrentHashMap.newKeySet(streamResults.size());
-
-            @Override
-            public void onResponse(Message<NoPayload> msg)
-            {
-                responses.remove(msg.from());
-                if (responses.isEmpty())
-                    trySuccess(null);
-            }
-
-            @Override
-            public void onFailure(InetAddressAndPort from, RequestFailure failure)
-            {
-                tryFailure(failure.failure);
-            }
-        }
-
-        NotifyFailure notifyFailure = new NotifyFailure();
-        for (Map.Entry<InetAddressAndPort, SingleTransferResult> entry : streamResults.entrySet())
-        {
-            InetAddressAndPort to = entry.getKey();
-            // Coordinator cleans up CoordinatedTransfer and PendingLocalTransfer separately, does not need to notify
-            if (FBUtilities.getBroadcastAddressAndPort().equals(to))
-                continue;
-
-            SingleTransferResult result = entry.getValue();
-            if (result.planId() == null)
-            {
-                logger.warn("{} Skipping notification of transfer failure to {} due to unknown planId", logPrefix(), to);
-                continue;
-            }
-
-            logger.debug("{}, Notifying {} of transfer failure for plan {}", logPrefix(), to, result.planId());
-            notifyFailure.responses.add(to);
-            Message<TransferFailed> msg = Message.out(Verb.TRACKED_TRANSFER_FAILED_REQ, new TransferFailed(result.planId()));
-            MessagingService.instance().sendWithCallback(msg, to, notifyFailure);
-        }
-        notifyFailure.get();
     }
 
     private void markStreamFailure(InetAddressAndPort to, Throwable cause)

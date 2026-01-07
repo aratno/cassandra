@@ -239,7 +239,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
             // Another repair succeeds, all peers should now agree on the local data
             long mark = COORDINATING.logs().mark();
             COORDINATING.nodetoolResult("repair", "--full", KEYSPACE).asserts().success();
-            List<String> logs = COORDINATING.logs().grep(mark, "Activating transfer .* on ").getResult();
+            List<String> logs = COORDINATING.logs().grep(mark, "Activating .* on ").getResult();
             Assertions.assertThat(logs).isNotEmpty();
             cluster.forEach(instance -> {
                 Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE + ".tbl WHERE k = 1");
@@ -302,9 +302,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
                                       .withConfig(cfg -> cfg
                                                          .with(Feature.NETWORK)
                                                          .with(Feature.GOSSIP)
-                                                         .set("mutation_tracking_enabled", "true")
-                                                         .set("repair_request_timeout", "5s")
-                                                         .set("repair.retries.max_attempts", "1"))
+                                                         .set("mutation_tracking_enabled", "true"))
                                       .start())
         {
             cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='tracked';");

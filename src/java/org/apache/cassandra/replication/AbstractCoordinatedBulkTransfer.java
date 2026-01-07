@@ -20,6 +20,7 @@ package org.apache.cassandra.replication;
 
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -38,6 +39,7 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.NoPayload;
 import org.apache.cassandra.net.RequestCallbackWithFailure;
 import org.apache.cassandra.net.Verb;
+import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.Throwables;
 import org.apache.cassandra.utils.TimeUUID;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
@@ -55,7 +57,6 @@ public abstract class AbstractCoordinatedBulkTransfer
     }
 
     private final ShortMutationId id;
-    // TODO: Refactor to new class PendingTransfers
     final ConcurrentMap<InetAddressAndPort, SingleTransferResult> streamResults;
 
     public AbstractCoordinatedBulkTransfer(ShortMutationId id)
@@ -192,6 +193,62 @@ public abstract class AbstractCoordinatedBulkTransfer
             throw Throwables.unchecked(cause);
         }
         logger.debug("{} Activation commit complete for {}", logPrefix(), peers);
+    }
+
+    /**
+     * Notify all replicas that this transfer failed, triggering cleanup of pending SSTables.
+     * This is used by both TrackedImportTransfer and TrackedRepairSyncTransfer.
+     */
+    protected void notifyFailure() throws ExecutionException, InterruptedException
+    {
+        class NotifyFailure extends AsyncFuture<Void> implements RequestCallbackWithFailure<NoPayload>
+        {
+            final Set<InetAddressAndPort> responses = ConcurrentHashMap.newKeySet(streamResults.size());
+
+            @Override
+            public void onResponse(Message<NoPayload> msg)
+            {
+                responses.remove(msg.from());
+                if (responses.isEmpty())
+                    trySuccess(null);
+            }
+
+            @Override
+            public void onFailure(InetAddressAndPort from, RequestFailure failure)
+            {
+                // Log but don't fail - best effort cleanup
+                logger.warn("{} Failed to notify {} of transfer failure: {}", logPrefix(), from, failure);
+                responses.remove(from);
+                if (responses.isEmpty())
+                    trySuccess(null);
+            }
+        }
+
+        NotifyFailure notifyFailure = new NotifyFailure();
+        for (Map.Entry<InetAddressAndPort, SingleTransferResult> entry : streamResults.entrySet())
+        {
+            InetAddressAndPort to = entry.getKey();
+            // Coordinator cleans up CoordinatedTransfer and PendingLocalTransfer separately, does not need to notify
+            if (FBUtilities.getBroadcastAddressAndPort().equals(to))
+                continue;
+
+            SingleTransferResult result = entry.getValue();
+            if (result.planId() == null)
+            {
+                // No planId means streaming never completed, so there's nothing to clean up on the replica
+                logger.debug("{} Skipping notification of transfer failure to {} - no planId", logPrefix(), to);
+                continue;
+            }
+
+            logger.debug("{} Notifying {} of transfer failure for plan {}", logPrefix(), to, result.planId());
+            notifyFailure.responses.add(to);
+            Message<TransferFailed> msg = Message.out(Verb.TRACKED_TRANSFER_FAILED_REQ, new TransferFailed(result.planId()));
+            MessagingService.instance().sendWithCallback(msg, to, notifyFailure);
+        }
+
+        // Only wait if we actually sent notifications
+        if (!notifyFailure.responses.isEmpty())
+            notifyFailure.get();
     }
 
     /**

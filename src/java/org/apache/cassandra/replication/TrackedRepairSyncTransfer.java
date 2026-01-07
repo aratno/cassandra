@@ -25,7 +25,6 @@ import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import org.apache.cassandra.repair.RepairJobDesc;
 import org.apache.cassandra.repair.SyncStat;
 import org.apache.cassandra.repair.SyncTask;
 
@@ -35,24 +34,19 @@ import org.apache.cassandra.repair.SyncTask;
  * reconciliations depend on the log state to guarantee monotonicity of subsequent reads. Streaming sessions for full
  * repair can complete on some instances before others, so we need to represent those completed sessions as unreconciled
  * in the log.
+ * <p>
+ * TODO: call LocalTransfers.instance().save(this) once the RepairJob starts streaming
  */
 public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
 {
     private static final Logger logger = LoggerFactory.getLogger(TrackedRepairSyncTransfer.class);
 
-    public TrackedRepairSyncTransfer(ShortMutationId id, RepairJobDesc desc, Collection<SyncTask> tasks)
+    public TrackedRepairSyncTransfer(ShortMutationId id, Collection<SyncTask> tasks)
     {
         super(id);
-        /*
-        We need to update transfer ID generation to happen after tasks are split, instead of at RepairJob construction
-        time. All the IDs for a transfer should be tracked in TrackedRepairSyncTransfer so we can activate them all
-        later.
-        */
+        for (SyncTask task : tasks)
+            streamResults.put(task.nodePair().peer, SingleTransferResult.Init());
     }
-
-    /*
-    Should call LocalTransfers.instance().save(this) once the RepairJob starts streaming
-    */
 
     public void activate(List<SyncStat> syncs)
     {
@@ -65,5 +59,13 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
         }
 
         activate(streamResults.keySet());
+    }
+
+    @Override
+    public String toString()
+    {
+        return "TrackedRepairSyncTransfer{" +
+               "streamResults=" + streamResults +
+               '}';
     }
 }

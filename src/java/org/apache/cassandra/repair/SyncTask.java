@@ -38,6 +38,7 @@ import org.apache.cassandra.repair.messages.SyncRequest;
 import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.tracing.Tracing;
+import org.apache.cassandra.utils.TimeUUID;
 
 import static org.apache.cassandra.net.Verb.SYNC_REQ;
 import static org.apache.cassandra.repair.messages.RepairMessage.notDone;
@@ -53,6 +54,7 @@ public abstract class SyncTask extends AsyncFuture<SyncStat> implements Runnable
     protected final PreviewKind previewKind;
     protected final SyncNodePair nodePair;
     protected final MutationId transferId;
+    protected volatile TimeUUID planId;
 
     protected volatile long startTime = Long.MIN_VALUE;
     protected final SyncStat stat;
@@ -67,6 +69,13 @@ public abstract class SyncTask extends AsyncFuture<SyncStat> implements Runnable
         this.previewKind = previewKind;
         this.transferId = transferId;
         this.stat = new SyncStat(nodePair, rangesToSync);
+
+        addCallback((syncStat, failure) -> {
+            if (syncStat != null && syncStat.planId != null)
+                this.planId = syncStat.planId;
+            else if (failure instanceof org.apache.cassandra.streaming.StreamException)
+                this.planId = ((org.apache.cassandra.streaming.StreamException) failure).finalState.planId;
+        });
     }
 
     protected SyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort primaryEndpoint, InetAddressAndPort peer, List<Range<Token>> rangesToSync, PreviewKind previewKind)
@@ -90,6 +99,16 @@ public abstract class SyncTask extends AsyncFuture<SyncStat> implements Runnable
     public MutationId getTransferId()
     {
         return transferId;
+    }
+
+    /**
+     * Returns the planId associated with this sync task's streaming operation.
+     * The planId is captured when the task completes (successfully or with a StreamException).
+     * @return the planId if streaming has completed, null otherwise
+     */
+    public TimeUUID getPlanId()
+    {
+        return planId;
     }
 
     /**
