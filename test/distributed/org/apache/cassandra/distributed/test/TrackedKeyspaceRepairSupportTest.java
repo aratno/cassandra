@@ -82,6 +82,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
                                       .start())
         {
             cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='tracked';");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE_TABLE + " (k INT PRIMARY KEY, v INT)");
 
             NodeToolResult result = cluster.get(1).nodetoolResult("repair", KEYSPACE);
             result.asserts().failure();
@@ -99,6 +100,7 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
                                      .start())
         {
             cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='tracked';");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE_TABLE + " (k INT PRIMARY KEY, v INT)");
 
             NodeToolResult result = cluster.get(1).nodetoolResult("repair", "--validate", KEYSPACE);
             result.asserts().failure();

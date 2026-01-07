@@ -188,6 +188,7 @@ import org.apache.cassandra.service.snapshot.SnapshotManager;
 import org.apache.cassandra.streaming.StreamManager;
 import org.apache.cassandra.streaming.StreamResultFuture;
 import org.apache.cassandra.streaming.StreamState;
+import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.tcm.ClusterMetadata;
 import org.apache.cassandra.tcm.ClusterMetadataService;
 import org.apache.cassandra.tcm.MultiStepOperation;
@@ -3056,6 +3057,15 @@ public class StorageService extends NotificationBroadcasterSupport implements IE
 
     public Pair<Integer, Future<?>> repair(String keyspace, RepairOption option, List<ProgressListener> listeners)
     {
+        KeyspaceMetadata ksm = Keyspace.open(keyspace).getMetadata();
+        if (ksm.params.replicationType.isTracked())
+        {
+            if (option.getPreviewKind() == PreviewKind.REPAIRED)
+                throw new IllegalArgumentException("Tracked keyspaces do not support validation repair");
+            if (option.isIncremental())
+                throw new IllegalArgumentException("Tracked keyspaces do not support incremental repair");
+        }
+
         // if ranges are not specified
         if (option.getRanges().isEmpty())
         {
