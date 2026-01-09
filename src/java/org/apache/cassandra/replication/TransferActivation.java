@@ -23,6 +23,8 @@ import java.util.Objects;
 
 import com.google.common.base.Preconditions;
 
+import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.exceptions.RequestFailureReason;
 import org.apache.cassandra.io.IVersionedSerializer;
@@ -174,7 +176,7 @@ public class TransferActivation
     public String toString()
     {
         return "TransferActivation{" +
-               ", planId=" + planId +
+               "planId=" + planId +
                ", transferId=" + transferId +
                ", coordinatorId=" + coordinatorId +
                ", phase=" + phase +

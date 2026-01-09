@@ -430,9 +430,11 @@ public class MutationTrackingService
         PendingLocalTransfer pending = LocalTransfers.instance().getPendingTransfer(activation.planId);
         if (pending == null)
             throw new IllegalStateException(String.format("Cannot activate unknown local pending transfer %s", activation));
+
+        boolean committed;
         try
         {
-            pending.activate(activation);
+            committed = pending.activate(activation);
         }
         catch (Exception e)
         {
@@ -443,7 +445,7 @@ public class MutationTrackingService
         shardLock.readLock().lock();
         try
         {
-            if (activation.isCommit())
+            if (committed)
             {
                 keyspaceShards.get(pending.keyspace).lookUp(pending.range).finishActivation(pending, activation);
                 incomingMutations.invokeListeners(activation.transferId);

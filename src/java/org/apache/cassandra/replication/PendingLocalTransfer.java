@@ -139,10 +139,10 @@ public class PendingLocalTransfer
      * Synchronized to prevent a single activation from running multiple times if requested during read reconciliation
      * and in the background via {@link ActiveLogReconciler}.
      */
-    public synchronized void activate(TransferActivation activation)
+    public synchronized boolean activate(TransferActivation activation)
     {
         if (activated)
-            return;
+            return false;
 
         Preconditions.checkState(isFullReplica());
 
@@ -155,7 +155,7 @@ public class PendingLocalTransfer
         if (activation.isPrepare())
         {
             logger.info("{} Not adding SSTables to live set for dryRun {}", logPrefix(), activation);
-            return;
+            return false;
         }
 
         // Modify SSTables metadata to durably set transfer ID before importing
@@ -212,6 +212,7 @@ public class PendingLocalTransfer
         logger.info("{} Finished activating transfer {} in {} ms", logPrefix(), this, finishedActivation - startedActivation);
 
         LocalTransfers.instance().scheduleCleanup();
+        return true;
     }
 
     @Override

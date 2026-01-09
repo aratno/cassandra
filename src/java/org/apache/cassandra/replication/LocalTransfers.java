@@ -52,6 +52,7 @@ import org.apache.cassandra.repair.SyncStat;
 import org.apache.cassandra.repair.SyncTask;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.TimeUUID;
+import org.apache.cassandra.utils.concurrent.AsyncPromise;
 import org.apache.cassandra.utils.concurrent.Future;
 
 import static org.apache.cassandra.concurrent.ExecutorFactory.Global.executorFactory;
@@ -148,33 +149,46 @@ public class LocalTransfers
         }
 
         // Create and register a TrackedRepairSyncTransfer for each unique transfer ID
-        for (Map.Entry<ShortMutationId, List<SyncTask>> entry : tasksByTransferId.entrySet())
+        lock.writeLock().lock();
+        try
         {
-            ShortMutationId transferId = entry.getKey();
-            List<SyncTask> tasksForTransfer = entry.getValue();
-            TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(transferId, tasksForTransfer);
-            coordinating.put(transferId, transfer);
+            for (Map.Entry<ShortMutationId, List<SyncTask>> entry : tasksByTransferId.entrySet())
+            {
+                ShortMutationId transferId = entry.getKey();
+                List<SyncTask> tasksForTransfer = entry.getValue();
+                TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(transferId, tasksForTransfer);
+                logger.debug("{} Saving {}", transfer.logPrefix(), transfer);
+                coordinating.put(transferId, transfer);
+            }
+        }
+        finally
+        {
+            lock.writeLock().unlock();
         }
     }
 
     /**
      * Begin activation for the sync'd transfer(s)
      */
-    public void onRepairSyncCompletion(RepairJob job, Future<List<SyncStat>> syncCompletion, Executor executor)
+    public Future<List<SyncStat>> onRepairSyncCompletion(RepairJob job, Future<List<SyncStat>> syncCompletion, Executor executor)
     {
+        AsyncPromise<List<SyncStat>> activationFuture = new AsyncPromise<>();
+
         syncCompletion.addCallback(new FutureCallback<List<SyncStat>>()
         {
             @Override
             public void onSuccess(List<SyncStat> syncs)
             {
-                // Activation will acquire the write lock anyway, so don't self-deadlock
+                Map<MutationId, List<SyncStat>> syncsByTransferId;
+                Map<MutationId, TrackedRepairSyncTransfer> transfersToActivate = new HashMap<>();
+
                 lock.writeLock().lock();
                 try
                 {
                     logger.info("maybeActivate onSuccess {} {} {}", syncs, coordinating, local);
 
                     // Collect all unique transfer IDs from the job's sync tasks
-                    Map<MutationId, List<SyncStat>> syncsByTransferId = new HashMap<>();
+                    syncsByTransferId = new HashMap<>();
 
                     // Build a map of sync task ranges to their transfer IDs for lookup
                     Map<Collection<Range<Token>>, MutationId> rangeToTransferId = new HashMap<>();
@@ -193,23 +207,42 @@ public class LocalTransfers
                             syncsByTransferId.computeIfAbsent(transferId, k -> new ArrayList<>()).add(sync);
                     }
 
-                    // Activate each transfer with its corresponding sync stats
+                    // Look up transfers while holding the lock
                     for (Map.Entry<MutationId, List<SyncStat>> entry : syncsByTransferId.entrySet())
                     {
                         MutationId transferId = entry.getKey();
-                        List<SyncStat> syncsForTransfer = entry.getValue();
-
                         AbstractCoordinatedBulkTransfer transfer0 = coordinating.get(transferId);
                         Preconditions.checkState(transfer0 instanceof TrackedRepairSyncTransfer,
                                                  "Expected TrackedRepairSyncTransfer for %s but got %s",
                                                  transferId, transfer0);
-                        TrackedRepairSyncTransfer transfer = (TrackedRepairSyncTransfer) transfer0;
-                        transfer.activate(syncsForTransfer);
+                        transfersToActivate.put(transferId, (TrackedRepairSyncTransfer) transfer0);
                     }
                 }
                 finally
                 {
                     lock.writeLock().unlock();
+                }
+
+                // Activate transfers WITHOUT holding the lock (activate() acquires its own locks and can block)
+                try
+                {
+                    for (Map.Entry<MutationId, TrackedRepairSyncTransfer> entry : transfersToActivate.entrySet())
+                    {
+                        MutationId transferId = entry.getKey();
+                        TrackedRepairSyncTransfer transfer = entry.getValue();
+                        List<SyncStat> syncsForTransfer = syncsByTransferId.get(transferId);
+                        transfer.activate(syncsForTransfer);
+                    }
+
+                    // Activation succeeded, complete the future with the sync stats
+                    activationFuture.trySuccess(syncs);
+                }
+                catch (Throwable t)
+                {
+                    // Activation failed, fail the future
+                    // Note: cleanup will be triggered automatically when the async COMMIT responses complete
+                    logger.error("Activation failed", t);
+                    activationFuture.tryFailure(t);
                 }
             }
 
@@ -252,6 +285,9 @@ public class LocalTransfers
                     }
 
                     scheduleCleanup();
+
+                    // Sync failed, fail the activation future as well
+                    activationFuture.tryFailure(t);
                 }
                 finally
                 {
@@ -259,6 +295,8 @@ public class LocalTransfers
                 }
             }
         }, executor);
+
+        return activationFuture;
     }
 
     Purger purger = new Purger();

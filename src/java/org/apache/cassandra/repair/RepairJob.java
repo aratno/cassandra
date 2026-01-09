@@ -264,9 +264,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
             // For tracked keyspaces, we need to ensure sync'd data is present in the log
             boolean isTracked = cfs.metadata().replicationType().isTracked();
             if (isTracked)
-            {
-                LocalTransfers.instance().onRepairSyncCompletion(this, syncResults, taskExecutor);
-            }
+                syncResults = LocalTransfers.instance().onRepairSyncCompletion(this, syncResults, taskExecutor);
         }
         else
         {

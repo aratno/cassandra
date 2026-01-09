@@ -623,6 +623,8 @@ public class BulkTransfersTest extends TestBaseImpl
             // null to not skip
             public static volatile TransferActivation.Phase phase;
 
+            public static volatile boolean throwOnActivation = false;
+
             public static IInstanceInitializer install(int...nodes)
             {
                 return (ClassLoader cl, ThreadGroup tg, int num, int generation) -> {
@@ -639,8 +641,16 @@ public class BulkTransfersTest extends TestBaseImpl
             // Need to set phase in each instance's classloader, otherwise assignment won't be visible to injected method body
             public static void setup(Cluster cluster, TransferActivation.Phase phase)
             {
-                logger.debug("Setting up phase {}", phase);
-                cluster.forEach(instance -> instance.runOnInstance(() -> ByteBuddyInjections.SkipActivation.phase = phase));
+                setup(cluster, phase, false);
+            }
+
+            public static void setup(Cluster cluster, TransferActivation.Phase phase, boolean throwOnActivation)
+            {
+                logger.debug("Setting up phase {}, throwOnActivation {}", phase, throwOnActivation);
+                cluster.forEach(instance -> instance.runOnInstance(() -> {
+                    SkipActivation.phase = phase;
+                    SkipActivation.throwOnActivation = throwOnActivation;
+                }));
             }
 
             @SuppressWarnings("unused")
@@ -648,8 +658,17 @@ public class BulkTransfersTest extends TestBaseImpl
             {
                 if (phase != null && msg.payload.phase == SkipActivation.phase)
                 {
-                    logger.info("Skipping activation for test: {}", msg.payload);
-                    return;
+                    if (throwOnActivation)
+                    {
+                        // Avoid spamming logs with retries
+                        Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+                        throw new RuntimeException("Throwing on activation for test");
+                    }
+                    else
+                    {
+                        logger.info("Skipping activation for test: {}", msg.payload);
+                        return;
+                    }
                 }
 
                 logger.info("Test running activation as usual: {}", msg.payload);

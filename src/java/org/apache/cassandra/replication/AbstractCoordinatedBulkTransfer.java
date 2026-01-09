@@ -100,7 +100,7 @@ public abstract class AbstractCoordinatedBulkTransfer
             @Override
             public void onResponse(Message<NoPayload> msg)
             {
-                logger.debug("{} Got response from: {}", logPrefix(), msg.from());
+                logger.debug("{} Got prepare response from: {}", logPrefix(), msg.from());
                 responses.remove(msg.from());
                 if (responses.isEmpty())
                     trySuccess(null);
@@ -109,7 +109,7 @@ public abstract class AbstractCoordinatedBulkTransfer
             @Override
             public void onFailure(InetAddressAndPort from, RequestFailure failure)
             {
-                logger.debug("{} Got failure {} from {}", logPrefix(), failure, from);
+                logger.debug("{} Got prepare failure {} from {}", logPrefix(), failure, from);
                 AbstractCoordinatedBulkTransfer.this.streamResults.computeIfPresent(from, (peer, result) -> result.prepareFailed());
                 tryFailure(new RuntimeException("Tracked import failed during PREPARE on " + from + " due to " + failure.reason));
             }
@@ -120,7 +120,7 @@ public abstract class AbstractCoordinatedBulkTransfer
         {
             TransferActivation activation = new TransferActivation(this, peer, Phase.PREPARE);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
-            logger.debug("{} Sending {} to peer {}", logPrefix(), activation, peer);
+            logger.debug("{} Sending prepare {} to peer {}", logPrefix(), activation, peer);
             MessagingService.instance().sendWithCallback(msg, peer, prepare);
             AbstractCoordinatedBulkTransfer.this.streamResults.computeIfPresent(peer, (peer0, result) -> result.preparing());
         }
@@ -165,7 +165,7 @@ public abstract class AbstractCoordinatedBulkTransfer
             @Override
             public void onFailure(InetAddressAndPort from, RequestFailure failure)
             {
-                logger.error("{} Failed activation on {} due to {}", logPrefix(), from, failure);
+                logger.error("{} Failed activation commit on {} due to {}", logPrefix(), from, failure);
                 MutationTrackingService.instance.retryFailedTransfer(AbstractCoordinatedBulkTransfer.this, from, failure.failure);
                 // TODO(expected): should only fail if we don't meet requested CL
                 tryFailure(new RuntimeException("Tracked import failed during COMMIT on " + from + " due to " + failure.reason));
@@ -178,7 +178,7 @@ public abstract class AbstractCoordinatedBulkTransfer
             TransferActivation activation = new TransferActivation(this, peer, Phase.COMMIT);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
 
-            logger.debug("{} Sending {} to peer {}", logPrefix(), activation, peer);
+            logger.debug("{} Sending commit {} to peer {}", logPrefix(), activation, peer);
             MessagingService.instance().sendWithCallback(msg, peer, commit);
             AbstractCoordinatedBulkTransfer.this.streamResults.computeIfPresent(peer, (peer0, result) -> result.committing());
         }

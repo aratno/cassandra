@@ -48,6 +48,11 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
             streamResults.put(task.nodePair().peer, SingleTransferResult.Init());
     }
 
+    /**
+     * When all {@link SyncTask} for a repair have completed, follow the bulk transfer activation path to safely make
+     * the new data live and tracked in the log. This needs to include all replicas of {@link #id()}, even those that
+     * did not receive anything as part of the repair, otherwise any read reconciliation will fail to complete.
+     */
     public void activate(List<SyncStat> syncs)
     {
         logger.debug("{} Activating {}: {}", logPrefix(), this, syncs);
@@ -58,6 +63,9 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
             streamResults.put(sync.nodes.peer, SingleTransferResult.StreamComplete(sync.planId));
         }
 
+        // Need to activate on all replicas, not just ones with SyncStats
+        // TODO: How can I get the replicas for this ID? And I need to send them a TransferActivation with no planId,
+        // so they add the transferId to their log.
         activate(streamResults.keySet());
     }
 

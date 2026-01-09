@@ -53,9 +53,13 @@ import org.apache.cassandra.distributed.api.IInvokableInstance;
 import org.apache.cassandra.distributed.api.NodeToolResult;
 import org.apache.cassandra.distributed.shared.AssertUtils;
 import org.apache.cassandra.distributed.shared.ClusterUtils;
+import org.apache.cassandra.distributed.test.tracking.BulkTransfersTest;
 import org.apache.cassandra.distributed.test.tracking.MutationTrackingReadReconciliationTest;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.File;
+import org.apache.cassandra.replication.ActiveLogReconciler;
+import org.apache.cassandra.replication.MutationTrackingService;
+import org.apache.cassandra.replication.TransferActivation;
 import org.assertj.core.api.Assertions;
 import org.awaitility.Awaitility;
 
@@ -68,6 +72,8 @@ import static org.apache.cassandra.distributed.shared.AssertUtils.row;
 
 public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
 {
+    private static final Logger logger = LoggerFactory.getLogger(TrackedKeyspaceRepairSupportTest.class);
+
     private static final String KEYSPACE = "tracked_ks";
     private static final String TABLE = "tbl";
     private static final String KEYSPACE_TABLE = String.format("%s.%s", KEYSPACE, TABLE);
@@ -443,6 +449,73 @@ public class TrackedKeyspaceRepairSupportTest extends TestBaseImpl
                 Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE pk = ?", KEY);
                 AssertUtils.assertRows(rows, row(KEY, 1));
             });
+        }
+    }
+
+    @Test
+    public void testRepairFailsOnMissedActivation() throws IOException
+    {
+        int MISSED_ACTIVATION = 3;
+        try (Cluster cluster = Cluster.build(3)
+                                      .withInstanceInitializer(BulkTransfersTest.ByteBuddyInjections.SkipActivation.install(MISSED_ACTIVATION))
+                                      .withConfig(cfg -> cfg.with(Feature.NETWORK)
+                                                            .with(Feature.GOSSIP)
+                                                            .set("mutation_tracking_enabled", "true")
+                                                            .set("write_request_timeout", "1000ms")
+                                                            .set("repair_request_timeout", "2s")
+                                                            .set("stream_transfer_task_timeout", "10s"))
+                                      .start())
+        {
+            cluster.schemaChange("CREATE KEYSPACE " + KEYSPACE + " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3} AND replication_type='tracked';");
+            cluster.schemaChange("CREATE TABLE " + KEYSPACE_TABLE + " (k INT PRIMARY KEY, v INT)");
+
+            IInvokableInstance COORDINATING = cluster.get(1);
+            IInvokableInstance MISSING = cluster.get(MISSED_ACTIVATION);
+
+            COORDINATING.executeInternal("INSERT INTO " + KEYSPACE_TABLE + " (k, v) VALUES (?, ?)", 1, 100);
+
+            // Before repair, only instance 1 has data
+            for (IInvokableInstance instance : cluster)
+            {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE k = 1");
+                if (instance == COORDINATING)
+                    AssertUtils.assertRows(rows, row(1, 100));
+                else
+                    AssertUtils.assertRows(rows); // empty
+            }
+
+            // Repair fails because MISSING blocked activation
+            BulkTransfersTest.ByteBuddyInjections.SkipActivation.setup(cluster, TransferActivation.Phase.COMMIT, true);
+            {
+                NodeToolResult repair = COORDINATING.nodetoolResult("repair", "--full", KEYSPACE);
+                repair.asserts().failure();
+            }
+            for (IInvokableInstance instance : cluster)
+            {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE k = 1");
+                List<String> pending = getPendingSSTablePaths(instance);
+                if (instance == MISSING)
+                {
+                    AssertUtils.assertRows(rows); // empty
+                    Assertions.assertThat(pending).isNotEmpty();
+                }
+                else
+                {
+                    AssertUtils.assertRows(rows, row(1, 100));
+                    Assertions.assertThat(pending).isEmpty();
+                }
+            }
+
+            // Re-enable activation; read reconciliation at ALL should activate the pending SSTables on MISSING
+            BulkTransfersTest.ByteBuddyInjections.SkipActivation.setup(cluster, null);
+            COORDINATING.coordinator().execute("SELECT * FROM " + KEYSPACE_TABLE + " WHERE k = 1", ALL);
+            for (IInvokableInstance instance : cluster)
+            {
+                Object[][] rows = instance.executeInternal("SELECT * FROM " + KEYSPACE_TABLE + " WHERE k = 1");
+                List<String> pending = getPendingSSTablePaths(instance);
+                AssertUtils.assertRows(rows, row(1, 100));
+                Assertions.assertThat(pending).isEmpty();
+            }
         }
     }
 }
