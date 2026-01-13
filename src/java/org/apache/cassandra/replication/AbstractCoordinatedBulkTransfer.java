@@ -118,7 +118,7 @@ public abstract class AbstractCoordinatedBulkTransfer
         Prepare prepare = new Prepare();
         for (InetAddressAndPort peer : peers)
         {
-            TransferActivation activation = new TransferActivation(this, peer, Phase.PREPARE);
+            TransferActivation activation = TransferActivation.create(this, peer, Phase.PREPARE);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
             logger.debug("{} Sending prepare {} to peer {}", logPrefix(), activation, peer);
             MessagingService.instance().sendWithCallback(msg, peer, prepare);
@@ -175,7 +175,7 @@ public abstract class AbstractCoordinatedBulkTransfer
         Commit commit = new Commit(peers);
         for (InetAddressAndPort peer : peers)
         {
-            TransferActivation activation = new TransferActivation(this, peer, Phase.COMMIT);
+            TransferActivation activation = TransferActivation.create(this, peer, Phase.COMMIT);
             Message<TransferActivation> msg = Message.out(Verb.TRACKED_TRANSFER_ACTIVATE_REQ, activation);
 
             logger.debug("{} Sending commit {} to peer {}", logPrefix(), activation, peer);

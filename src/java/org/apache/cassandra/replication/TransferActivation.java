@@ -23,6 +23,7 @@ import java.util.Objects;
 
 import com.google.common.base.Preconditions;
 
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.cassandra.db.TypeSizes;
@@ -48,6 +49,8 @@ import org.apache.cassandra.utils.TimeUUID;
  */
 public class TransferActivation
 {
+    private static final Logger logger = LoggerFactory.getLogger(TransferActivation.class);
+
     public final TimeUUID planId;
     public final ShortMutationId transferId;
     public final NodeId coordinatorId;
@@ -80,11 +83,6 @@ public class TransferActivation
         }
     }
 
-    public TransferActivation(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort peer, Phase phase)
-    {
-        this(transfer.streamResults.get(peer).planId(), transfer.id(), ClusterMetadata.current().myNodeId(), phase);
-    }
-
     TransferActivation(TimeUUID planId, ShortMutationId transferId, NodeId coordinatorId, Phase phase)
     {
         Preconditions.checkArgument(!transferId.isNone());
@@ -94,6 +92,27 @@ public class TransferActivation
         this.transferId = transferId;
         this.coordinatorId = coordinatorId;
         this.phase = phase;
+    }
+
+    private TransferActivation(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort peer, Phase phase)
+    {
+        this(transfer.streamResults.get(peer).planId(), transfer.id(), ClusterMetadata.current().myNodeId(), phase);
+    }
+
+    public static TransferActivation create(AbstractCoordinatedBulkTransfer transfer, InetAddressAndPort peer, Phase phase)
+    {
+        try
+        {
+            // TODO: If transfer is a TrackedRepairSyncTransfer, it's possible for the planId to be empty if that
+            // replica received no data as part of the repair. Need to support a TransferActivation that just adds a
+            // transferId to the log, without a planId.
+            return new TransferActivation(transfer, peer, phase);
+        }
+        catch (Throwable t)
+        {
+            logger.error("Could not create TransferActivation", t);
+            throw t;
+        }
     }
 
     ShortMutationId id()

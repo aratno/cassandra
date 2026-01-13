@@ -57,8 +57,6 @@ import org.apache.cassandra.distributed.test.tracking.BulkTransfersTest;
 import org.apache.cassandra.distributed.test.tracking.MutationTrackingReadReconciliationTest;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.File;
-import org.apache.cassandra.replication.ActiveLogReconciler;
-import org.apache.cassandra.replication.MutationTrackingService;
 import org.apache.cassandra.replication.TransferActivation;
 import org.assertj.core.api.Assertions;
 import org.awaitility.Awaitility;

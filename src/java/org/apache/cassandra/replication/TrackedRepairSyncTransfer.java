@@ -19,14 +19,21 @@
 package org.apache.cassandra.replication;
 
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import com.google.common.base.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.repair.SyncStat;
 import org.apache.cassandra.repair.SyncTask;
+import org.apache.cassandra.tcm.ClusterMetadata;
+import org.apache.cassandra.tcm.membership.NodeId;
 
 /**
  * Repair sync tasks (that stream SSTable contents) must be integrated with Mutation Tracking's bulk transfer handling
@@ -41,11 +48,29 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
 {
     private static final Logger logger = LoggerFactory.getLogger(TrackedRepairSyncTransfer.class);
 
-    public TrackedRepairSyncTransfer(ShortMutationId id, Collection<SyncTask> tasks)
+    public TrackedRepairSyncTransfer(ShortMutationId id, Participants participants, Collection<SyncTask> tasks)
     {
         super(id);
+
+        Set<Integer> replicaNodeIds = participants.asSet();
+        Map<InetAddressAndPort, Collection<SyncTask>> receivingReplicaToTasks = new HashMap<>();
+
         for (SyncTask task : tasks)
-            streamResults.put(task.nodePair().peer, SingleTransferResult.Init());
+            receivingReplicaToTasks.computeIfAbsent(task.nodePair().peer, key -> new HashSet<>()).add(task);
+
+        ClusterMetadata cm = ClusterMetadata.current();
+        for (Integer replicaNodeId : replicaNodeIds)
+        {
+            InetAddressAndPort addr = cm.directory.endpoint(new NodeId(replicaNodeId));
+            Collection<SyncTask> syncTasks = receivingReplicaToTasks.get(addr);
+            // Need to activate on all replicas, not just ones with SyncTasks. For replicas that don't receive any data
+            // as part of a repair, they still need to activate the transfer ID as a no-op, to allow read reconciliations
+            // to complete.
+            if (syncTasks == null)
+                streamResults.put(addr, SingleTransferResult.Noop());
+            else
+                streamResults.put(addr, SingleTransferResult.Init());
+        }
     }
 
     /**
@@ -63,9 +88,6 @@ public class TrackedRepairSyncTransfer extends AbstractCoordinatedBulkTransfer
             streamResults.put(sync.nodes.peer, SingleTransferResult.StreamComplete(sync.planId));
         }
 
-        // Need to activate on all replicas, not just ones with SyncStats
-        // TODO: How can I get the replicas for this ID? And I need to send them a TransferActivation with no planId,
-        // so they add the transferId to their log.
         activate(streamResults.keySet());
     }
 

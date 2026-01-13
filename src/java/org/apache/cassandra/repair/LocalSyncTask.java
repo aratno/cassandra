@@ -32,7 +32,7 @@ import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.locator.RangesAtEndpoint;
-import org.apache.cassandra.replication.MutationId;
+import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.streaming.ProgressInfo;
 import org.apache.cassandra.streaming.StreamEvent;
@@ -69,7 +69,7 @@ public class LocalSyncTask extends SyncTask implements StreamEventHandler
 
     public LocalSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort local, InetAddressAndPort remote,
                          List<Range<Token>> diff, TimeUUID pendingRepair,
-                         boolean requestRanges, boolean transferRanges, PreviewKind previewKind, MutationId transferId)
+                         boolean requestRanges, boolean transferRanges, PreviewKind previewKind, ShortMutationId transferId)
     {
         super(ctx, desc, local, remote, diff, previewKind, transferId);
         Preconditions.checkArgument(requestRanges || transferRanges, "Nothing to do in a sync job");
@@ -88,13 +88,17 @@ public class LocalSyncTask extends SyncTask implements StreamEventHandler
     }
 
     @Override
-    public SyncTask withRanges(Collection<Range<Token>> newRanges, MutationId transferId)
+    public SyncTask withRanges(Collection<Range<Token>> newRanges)
     {
-        List<Range<Token>> rangeList = newRanges instanceof List
-                                       ? (List<Range<Token>>) newRanges
-                                       : new ArrayList<>(newRanges);
-        return new LocalSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer,
-                                 rangeList, pendingRepair, requestRanges, transferRanges, previewKind, transferId);
+        List<Range<Token>> rangeList = newRanges instanceof List ? (List<Range<Token>>) newRanges : new ArrayList<>(newRanges);
+        return new LocalSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer, rangeList, pendingRepair, requestRanges, transferRanges, previewKind);
+    }
+
+    @Override
+    public SyncTask withTransferId(ShortMutationId transferId)
+    {
+        Preconditions.checkState(this.transferId == null);
+        return new LocalSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer, rangesToSync, pendingRepair, requestRanges, transferRanges, previewKind, transferId);
     }
 
     @VisibleForTesting

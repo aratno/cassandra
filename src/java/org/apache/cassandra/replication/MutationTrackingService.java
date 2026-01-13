@@ -48,6 +48,7 @@ import org.apache.cassandra.concurrent.ScheduledExecutorPlus;
 import org.apache.cassandra.db.ConsistencyLevel;
 import org.apache.cassandra.cql3.UntypedResultSet;
 import org.apache.cassandra.db.DecoratedKey;
+import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.db.Mutation;
 import org.apache.cassandra.db.PartitionPosition;
 import org.apache.cassandra.db.SystemKeyspace;
@@ -63,6 +64,8 @@ import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.net.Message;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.net.Verb;
+import org.apache.cassandra.repair.SyncTask;
+import org.apache.cassandra.repair.SyncTasks;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.ReplicationParams;
 import org.apache.cassandra.schema.Schema;
@@ -824,37 +827,30 @@ public class MutationTrackingService
         return new ArrayList<>(rangesByShard.values());
     }
 
-    /**
-     * Returns the shard range that contains all the given ranges.
-     * Requires that all ranges fall within a single shard.
-     *
-     * @param keyspace the keyspace name
-     * @param ranges the ranges to look up
-     * @return the shard's token range
-     */
-    public Range<Token> getShardRangeForRanges(String keyspace, Collection<Range<Token>> ranges)
+    public void alignToShardBoundaries(String keyspace, List<SyncTask> tasks, SyncTasks into)
     {
-        KeyspaceShards ks = keyspaceShards.get(keyspace);
-        if (ks == null)
-            throw new IllegalStateException("No shards found for keyspace " + keyspace);
+        Keyspace ks = Keyspace.open(keyspace);
+        Preconditions.checkArgument(ks != null && ks.getMetadata().replicationStrategy.replicationType.isTracked());
 
-        Preconditions.checkArgument(!ranges.isEmpty(), "Cannot determine shard for empty range list");
+        KeyspaceShards shards = keyspaceShards.get(keyspace);
 
-        // Look up the shard for the first range
-        Shard shard = ks.lookUp(ranges.iterator().next());
-        Range<Token> shardRange = shard.range;
+        Map<Shard, Collection<SyncTask>> aligned = new HashMap<>();
 
-        // Verify all ranges belong to the same shard
-        for (Range<Token> range : ranges)
+        for (SyncTask task : tasks)
         {
-            Shard rangeShard = ks.lookUp(range);
-            if (!rangeShard.range.equals(shardRange))
-                throw new IllegalArgumentException(
-                    String.format("Ranges %s span multiple shards (%s and %s)",
-                                  ranges, shardRange, rangeShard.range));
+            Set<Shard> intersectingShards = new HashSet<>();
+            shards.forEachIntersectingShard(task.rangesToSync, intersectingShards::add);
+            for (Shard intersectingShard : intersectingShards)
+                aligned.computeIfAbsent(intersectingShard, key -> new HashSet<>())
+                       .add(task.withRanges(Collections.singleton(intersectingShard.range)));
         }
 
-        return shardRange;
+        for (Map.Entry<Shard, Collection<SyncTask>> entry : aligned.entrySet())
+        {
+            Shard shard = entry.getKey();
+            Collection<SyncTask> syncTasks = entry.getValue();
+            into.addAll(shard.nextId(), shard.participants, syncTasks);
+        }
     }
 
     public static class KeyspaceShards
@@ -1065,6 +1061,14 @@ public class MutationTrackingService
                 //  SELECT * statements create Bounds[min,min], (PartitionKeyRestrictions.java:L174) not Range(min,min],
                 //  which Ranges generally won't intersect with (Range.java:L148), so contains is used here to make it work
                 if (bounds.contains(range.right) || range.intersects(bounds))
+                    consumer.accept(shard);
+            });
+        }
+
+        private void forEachIntersectingShard(Collection<Range<Token>> ranges, Consumer<Shard> consumer)
+        {
+            shards.forEach((range0, shard) -> {
+                if (shard.range.intersects(ranges))
                     consumer.accept(shard);
             });
         }

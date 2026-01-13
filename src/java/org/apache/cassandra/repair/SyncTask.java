@@ -25,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 
+import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,13 +54,13 @@ public abstract class SyncTask extends AsyncFuture<SyncStat> implements Runnable
     public final List<Range<Token>> rangesToSync;
     protected final PreviewKind previewKind;
     protected final SyncNodePair nodePair;
-    protected final MutationId transferId;
+    protected final ShortMutationId transferId;
     protected volatile TimeUUID planId;
 
     protected volatile long startTime = Long.MIN_VALUE;
     protected final SyncStat stat;
 
-    protected SyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort primaryEndpoint, InetAddressAndPort peer, List<Range<Token>> rangesToSync, PreviewKind previewKind, MutationId transferId)
+    protected SyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort primaryEndpoint, InetAddressAndPort peer, List<Range<Token>> rangesToSync, PreviewKind previewKind, ShortMutationId transferId)
     {
         Preconditions.checkArgument(!peer.equals(primaryEndpoint), "Sending and receiving node are the same: %s", peer);
         this.ctx = ctx;
@@ -86,17 +87,19 @@ public abstract class SyncTask extends AsyncFuture<SyncStat> implements Runnable
     protected abstract void startSync();
 
     /**
-     * Creates a new SyncTask with the same parameters but different ranges and transfer ID.
+     * Creates a new SyncTask with the same parameters but different ranges.
      * Used for splitting sync tasks on shard boundaries.
      */
-    public abstract SyncTask withRanges(Collection<Range<Token>> newRanges, MutationId transferId);
+    public abstract SyncTask withRanges(Collection<Range<Token>> newRanges);
+
+    public abstract SyncTask withTransferId(ShortMutationId transferId);
 
     public SyncNodePair nodePair()
     {
         return nodePair;
     }
 
-    public MutationId getTransferId()
+    public ShortMutationId getTransferId()
     {
         return transferId;
     }

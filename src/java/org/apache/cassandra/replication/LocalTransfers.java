@@ -50,6 +50,7 @@ import org.apache.cassandra.repair.RepairJob;
 import org.apache.cassandra.repair.RepairJobDesc;
 import org.apache.cassandra.repair.SyncStat;
 import org.apache.cassandra.repair.SyncTask;
+import org.apache.cassandra.repair.SyncTasks;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.TimeUUID;
 import org.apache.cassandra.utils.concurrent.AsyncPromise;
@@ -136,30 +137,19 @@ public class LocalTransfers
      * Track before any of the sync tasks execute because we need to send {@link TransferFailed} to all replicas if a
      * failure happens.
      */
-    public void onRepairSyncExecution(RepairJob job, RepairJobDesc desc, Collection<SyncTask> tasks)
+    public void onRepairSyncExecution(RepairJob job, RepairJobDesc desc, SyncTasks tasks)
     {
         // One RepairJob may have multiple TrackedRepairSyncTransfers, if it spans across shards.
         // Group tasks by their transfer ID and create one TrackedRepairSyncTransfer per unique ID.
-        Map<ShortMutationId, List<SyncTask>> tasksByTransferId = new HashMap<>();
-        for (SyncTask task : tasks)
-        {
-            MutationId transferId = task.getTransferId();
-            if (transferId != null)
-                tasksByTransferId.computeIfAbsent(transferId, k -> new ArrayList<>()).add(task);
-        }
-
         // Create and register a TrackedRepairSyncTransfer for each unique transfer ID
         lock.writeLock().lock();
         try
         {
-            for (Map.Entry<ShortMutationId, List<SyncTask>> entry : tasksByTransferId.entrySet())
-            {
-                ShortMutationId transferId = entry.getKey();
-                List<SyncTask> tasksForTransfer = entry.getValue();
-                TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(transferId, tasksForTransfer);
+            tasks.forEach((ShortMutationId id, SyncTasks.Entry entry) -> {
+                TrackedRepairSyncTransfer transfer = new TrackedRepairSyncTransfer(id, entry.participants, entry.tasks);
                 logger.debug("{} Saving {}", transfer.logPrefix(), transfer);
-                coordinating.put(transferId, transfer);
-            }
+                coordinating.put(id, transfer);
+            });
         }
         finally
         {
@@ -179,8 +169,8 @@ public class LocalTransfers
             @Override
             public void onSuccess(List<SyncStat> syncs)
             {
-                Map<MutationId, List<SyncStat>> syncsByTransferId;
-                Map<MutationId, TrackedRepairSyncTransfer> transfersToActivate = new HashMap<>();
+                Map<ShortMutationId, List<SyncStat>> syncsByTransferId;
+                Map<ShortMutationId, TrackedRepairSyncTransfer> transfersToActivate = new HashMap<>();
 
                 lock.writeLock().lock();
                 try
@@ -191,10 +181,10 @@ public class LocalTransfers
                     syncsByTransferId = new HashMap<>();
 
                     // Build a map of sync task ranges to their transfer IDs for lookup
-                    Map<Collection<Range<Token>>, MutationId> rangeToTransferId = new HashMap<>();
+                    Map<Collection<Range<Token>>, ShortMutationId> rangeToTransferId = new HashMap<>();
                     for (SyncTask task : job.getSyncTasks())
                     {
-                        MutationId transferId = task.getTransferId();
+                        ShortMutationId transferId = task.getTransferId();
                         if (transferId != null)
                             rangeToTransferId.put(task.rangesToSync, transferId);
                     }
@@ -202,15 +192,15 @@ public class LocalTransfers
                     // Group sync stats by transfer ID based on their ranges
                     for (SyncStat sync : syncs)
                     {
-                        MutationId transferId = rangeToTransferId.get(sync.differences);
+                        ShortMutationId transferId = rangeToTransferId.get(sync.differences);
                         if (transferId != null)
                             syncsByTransferId.computeIfAbsent(transferId, k -> new ArrayList<>()).add(sync);
                     }
 
                     // Look up transfers while holding the lock
-                    for (Map.Entry<MutationId, List<SyncStat>> entry : syncsByTransferId.entrySet())
+                    for (Map.Entry<ShortMutationId, List<SyncStat>> entry : syncsByTransferId.entrySet())
                     {
-                        MutationId transferId = entry.getKey();
+                        ShortMutationId transferId = entry.getKey();
                         AbstractCoordinatedBulkTransfer transfer0 = coordinating.get(transferId);
                         Preconditions.checkState(transfer0 instanceof TrackedRepairSyncTransfer,
                                                  "Expected TrackedRepairSyncTransfer for %s but got %s",
@@ -226,9 +216,9 @@ public class LocalTransfers
                 // Activate transfers WITHOUT holding the lock (activate() acquires its own locks and can block)
                 try
                 {
-                    for (Map.Entry<MutationId, TrackedRepairSyncTransfer> entry : transfersToActivate.entrySet())
+                    for (Map.Entry<ShortMutationId, TrackedRepairSyncTransfer> entry : transfersToActivate.entrySet())
                     {
-                        MutationId transferId = entry.getKey();
+                        ShortMutationId transferId = entry.getKey();
                         TrackedRepairSyncTransfer transfer = entry.getValue();
                         List<SyncStat> syncsForTransfer = syncsByTransferId.get(transferId);
                         transfer.activate(syncsForTransfer);
@@ -254,10 +244,10 @@ public class LocalTransfers
                 lock.writeLock().lock();
                 try
                 {
-                    Set<MutationId> transferIds = new HashSet<>();
+                    Set<ShortMutationId> transferIds = new HashSet<>();
                     for (SyncTask task : job.getSyncTasks())
                     {
-                        MutationId transferId = task.getTransferId();
+                        ShortMutationId transferId = task.getTransferId();
                         Preconditions.checkNotNull(transferId);
                         transferIds.add(transferId);
 
@@ -271,7 +261,7 @@ public class LocalTransfers
                         transfer.streamResults.put(peer, AbstractCoordinatedBulkTransfer.SingleTransferResult.Init().streamFailed(planId));
                     }
 
-                    for (MutationId transferId : transferIds)
+                    for (ShortMutationId transferId : transferIds)
                     {
                         AbstractCoordinatedBulkTransfer transfer = coordinating.get(transferId);
                         try

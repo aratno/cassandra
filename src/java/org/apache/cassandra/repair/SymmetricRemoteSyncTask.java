@@ -30,7 +30,7 @@ import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.exceptions.RepairException;
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.repair.messages.SyncRequest;
-import org.apache.cassandra.replication.MutationId;
+import org.apache.cassandra.replication.ShortMutationId;
 import org.apache.cassandra.streaming.PreviewKind;
 import org.apache.cassandra.streaming.SessionSummary;
 import org.apache.cassandra.tracing.Tracing;
@@ -46,19 +46,23 @@ public class SymmetricRemoteSyncTask extends SyncTask implements CompletableRemo
 {
     private static final Logger logger = LoggerFactory.getLogger(SymmetricRemoteSyncTask.class);
 
-    public SymmetricRemoteSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort r1, InetAddressAndPort r2, List<Range<Token>> differences, PreviewKind previewKind, MutationId transferId)
+    public SymmetricRemoteSyncTask(SharedContext ctx, RepairJobDesc desc, InetAddressAndPort r1, InetAddressAndPort r2, List<Range<Token>> differences, PreviewKind previewKind, ShortMutationId transferId)
     {
         super(ctx, desc, r1, r2, differences, previewKind, transferId);
     }
 
     @Override
-    public SyncTask withRanges(Collection<Range<Token>> newRanges, MutationId transferId)
+    public SyncTask withRanges(Collection<Range<Token>> newRanges)
     {
-        List<Range<Token>> rangeList = newRanges instanceof List
-                                       ? (List<Range<Token>>) newRanges
-                                       : new ArrayList<>(newRanges);
-        return new SymmetricRemoteSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer,
-                                           rangeList, previewKind, transferId);
+        List<Range<Token>> rangeList = newRanges instanceof List ? (List<Range<Token>>) newRanges : new ArrayList<>(newRanges);
+        return new SymmetricRemoteSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer, rangeList, previewKind, transferId);
+    }
+
+    @Override
+    public SyncTask withTransferId(ShortMutationId transferId)
+    {
+        Preconditions.checkState(this.transferId == null);
+        return new AsymmetricRemoteSyncTask(ctx, desc, nodePair.coordinator, nodePair.peer, rangesToSync, previewKind, transferId);
     }
 
     @Override

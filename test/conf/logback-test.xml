@@ -60,9 +60,11 @@
   <logger name="org.apache.hadoop" level="WARN"/>
 
   <logger name="org.apache.cassandra.db.monitoring" level="DEBUG"/>
+  <logger name="org.apache.cassandra.gms.*" level="WARN"/>
+  <logger name="org.apache.cassandra.io.util.*" level="WARN"/>
 
-  <!-- Do not change the name of this appender. LogbackStatusListener uses the thread name
-       tied to the appender name to know when to write to real stdout/stderr vs forwarding to logback -->
+    <!-- Do not change the name of this appender. LogbackStatusListener uses the thread name
+         tied to the appender name to know when to write to real stdout/stderr vs forwarding to logback -->
   <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
       <discardingThreshold>0</discardingThreshold>
       <maxFlushTime>0</maxFlushTime>

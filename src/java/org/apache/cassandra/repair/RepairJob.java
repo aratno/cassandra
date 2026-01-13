@@ -51,8 +51,6 @@ import org.apache.cassandra.repair.asymmetric.PreferedNodeFilter;
 import org.apache.cassandra.repair.asymmetric.ReduceHelper;
 import org.apache.cassandra.repair.state.JobState;
 import org.apache.cassandra.replication.LocalTransfers;
-import org.apache.cassandra.replication.MutationTrackingService;
-import org.apache.cassandra.replication.MutationId;
 import org.apache.cassandra.schema.SystemDistributedKeyspace;
 import org.apache.cassandra.schema.TableMetadata;
 import org.apache.cassandra.service.accord.IAccordService;
@@ -316,7 +314,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
         }, taskExecutor);
     }
 
-    private Future<List<SyncTask>> createSyncTasks(Future<AccordRepairResult> accordRepair, Future<?> allSnapshotTasks, List<InetAddressAndPort> allEndpoints)
+    private Future<SyncTasks> createSyncTasks(Future<AccordRepairResult> accordRepair, Future<?> allSnapshotTasks, List<InetAddressAndPort> allEndpoints)
     {
         Future<List<TreeResponse>> treeResponses;
         if (allSnapshotTasks != null)
@@ -346,46 +344,8 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
                 syncTasks = createOptimisedSyncingSyncTasks(trees);
             else
                 syncTasks = createStandardSyncTasks(trees);
-            return splitOnShardBoundaries(syncTasks);
+            return SyncTasks.alignedToShardBoundaries(desc, syncTasks);
         }, taskExecutor);
-    }
-
-    /**
-     * Mutation Tracking manages tracking metadata within shards that are each responsible for a piece of the owned
-     * token space. Executing a full repair across an entire node's ownership will span multiple shards, so repair sync
-     * tasks need to be split to each align within a single tracking shard.
-     */
-    private List<SyncTask> splitOnShardBoundaries(List<SyncTask> syncTasks)
-    {
-        Keyspace keyspace = Keyspace.open(desc.keyspace);
-        if (keyspace == null || !keyspace.getMetadata().params.replicationType.isTracked())
-            return syncTasks;
-
-        // Track transfer IDs by shard range to avoid generating duplicates
-        Map<Range<Token>, MutationId> transferIdsByShard = new HashMap<>();
-        List<SyncTask> splitTasks = new ArrayList<>(syncTasks.size());
-
-        for (SyncTask syncTask : syncTasks)
-        {
-            List<List<Range<Token>>> split = MutationTrackingService.instance.alignedToShardBoundaries(desc.keyspace, syncTask.rangesToSync);
-            for (List<Range<Token>> ranges : split)
-            {
-                // Determine which shard these ranges belong to
-                Range<Token> shardRange = MutationTrackingService.instance.getShardRangeForRanges(desc.keyspace, ranges);
-
-                // Generate transfer ID for this shard if we haven't already
-                MutationId transferId = transferIdsByShard.get(shardRange);
-                if (transferId == null)
-                {
-                    transferId = MutationTrackingService.instance.nextMutationId(desc.keyspace, ranges);
-                    transferIdsByShard.put(shardRange, transferId);
-                }
-
-                // Create split task with the transfer ID
-                splitTasks.add(syncTask.withRanges(ranges, transferId));
-            }
-        }
-        return splitTasks;
     }
 
     public synchronized void abort(@Nullable Throwable reason)
@@ -490,7 +450,7 @@ public class RepairJob extends AsyncFuture<RepairResult> implements Runnable
     }
 
     @VisibleForTesting
-    Future<List<SyncStat>> executeTasks(List<SyncTask> tasks)
+    Future<List<SyncStat>> executeTasks(SyncTasks tasks)
     {
         try
         {
